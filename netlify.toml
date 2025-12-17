@@ -1,4 +1,10 @@
+[build]
+command = "bash bash.sh && flutter build web"
+publish = "build/web"
+
+
 [[redirects]]
 from = "/*"
 to = "/index.html"
 status = 200
+
