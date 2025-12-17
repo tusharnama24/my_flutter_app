@@ -1,5 +1,5 @@
 [build]
-command = "bash bash.sh && flutter build web"
+command = "bash bash.sh"
 publish = "build/web"
 
 
