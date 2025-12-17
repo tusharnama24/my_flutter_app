@@ -1,0 +1,68 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+    id 'com.google.gms.google-services'
+}
+
+// ----> Place this block here, at the top level, outside android {}
+repositories {
+    flatDir {
+        dirs '../libs'
+    }
+}
+
+android {
+    namespace = "com.example.classic_1"
+    compileSdkVersion 35
+    ndkVersion = "25.1.8937393"
+
+    defaultConfig {
+        applicationId = "com.example.classic_1"
+        minSdkVersion flutter.minSdkVersion
+        targetSdkVersion 33
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        manifestPlaceholders = [
+                redirectSchemeName: "yourapp",
+                redirectHostName: "callback"
+        ]
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.debug
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+}
+
+dependencies {
+    implementation platform('com.google.firebase:firebase-bom:33.14.0')
+    implementation 'com.google.firebase:firebase-analytics'
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.9.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.1'
+    implementation 'com.google.android.gms:play-services-auth:20.7.0'
+    implementation(name: 'spotify-app-remote-release', ext: 'aar')
+    implementation(name: 'spotify-auth-release-2.1.0', ext: 'aar')
+    // implementation(name: 'spotify-auth-store-release-2.1.0', ext: 'aar')
+}
+
+flutter {
+    source = "../.."
+}
+
+apply plugin: 'com.google.gms.google-services'

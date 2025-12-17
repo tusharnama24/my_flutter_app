@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "61069233213",
+    "project_id": "halo-fb212",
+    "storage_bucket": "halo-fb212.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:61069233213:android:488a5691a5034b494fee54",
+        "android_client_info": {
+          "package_name": "com.example.classic_1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC-JvudW2bdu7KnKOl-cMTKHqZYrqF0ia8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

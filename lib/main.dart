@@ -1,0 +1,738 @@
+import 'package:classic_1/Bottom Pages/HomePage.dart';
+import 'package:classic_1/Category/categorypage.dart';
+import 'package:classic_1/forgotpasswordpage.dart';
+import 'package:classic_1/logoscreen.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter/cupertino.dart';
+import 'firebase_options.dart';
+import 'package:classic_1/widgets/google_sign_in_button.dart';
+import 'package:classic_1/chat/chat_list_page.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'interest_selection_page.dart';
+
+// ----------------- HALO THEME CONSTANTS -----------------
+const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
+const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep purple
+const Color kLightBackground = Color(0xFFF4F1FB); // Soft lavender background
+const Color kDarkBackgroundTop = Color(0xFF111111);
+const Color kDarkBackgroundBottom = Color(0xFF050505);
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final baseLight = ThemeData.light();
+    final baseDark = ThemeData.dark();
+
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: baseLight.copyWith(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: kPrimaryColor,
+          brightness: Brightness.light,
+        ),
+        scaffoldBackgroundColor: kLightBackground,
+        textTheme: GoogleFonts.poppinsTextTheme(baseLight.textTheme),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: kPrimaryColor,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+            ),
+            textStyle: GoogleFonts.poppins(
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: kSecondaryColor,
+            side: const BorderSide(color: kSecondaryColor, width: 1),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            textStyle: GoogleFonts.poppins(
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
+      ),
+      darkTheme: baseDark.copyWith(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: kPrimaryColor,
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: kDarkBackgroundBottom,
+        textTheme: GoogleFonts.poppinsTextTheme(baseDark.textTheme).apply(
+          bodyColor: Colors.white,
+          displayColor: Colors.white,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: kPrimaryColor,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+            ),
+            textStyle: GoogleFonts.poppins(
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.white,
+            side: BorderSide(color: Colors.white.withOpacity(0.6), width: 1),
+            backgroundColor: Colors.white.withOpacity(0.05),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            textStyle: GoogleFonts.poppins(
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
+      ),
+      themeMode: ThemeMode.system,
+      home: LogoScreen(), // LogoScreen should later navigate to LoginPage()
+    );
+  }
+}
+
+// ----------------- ELEGANT LOGIN PAGE -----------------
+
+class LoginPage extends StatefulWidget {
+  @override
+  _LoginPageState createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  bool _obscurePassword = true;
+  bool _isLoading = false;
+
+  void _showTermsAndConditions() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        final dialogTextTheme =
+        GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Text(
+            'Terms & Conditions',
+            style: dialogTextTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Text(
+              '''By using this application, you agree to the following terms and conditions:
+
+1. Acceptance of Terms
+   By accessing and using this app, you accept and agree to be bound by these terms and conditions.
+
+2. User Account
+   • You are responsible for maintaining the confidentiality of your account
+   • You must provide accurate and complete information
+   • You are responsible for all activities under your account
+
+3. User Conduct
+   • You agree not to use the app for any unlawful purpose
+   • You will not post or transmit any harmful, offensive, or inappropriate content
+   • You will respect other users' privacy and rights
+
+4. Intellectual Property
+   • All content in this app is protected by copyright and other intellectual property laws
+   • You may not reproduce, distribute, or create derivative works without permission
+
+5. Privacy
+   • Your use of this app is also governed by our Privacy Policy
+   • We collect and use your information as described in our Privacy Policy
+
+6. Limitation of Liability
+   • The app is provided "as is" without warranties of any kind
+   • We are not liable for any damages arising from your use of the app
+
+7. Changes to Terms
+   • We reserve the right to modify these terms at any time
+   • Continued use after changes constitutes acceptance
+
+8. Termination
+   • We may terminate or suspend your account at any time for violations of these terms
+
+If you have any questions about these Terms & Conditions, please contact us.''',
+              style: dialogTextTheme.bodyMedium,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                'Close',
+                style: dialogTextTheme.labelLarge?.copyWith(
+                  color: kSecondaryColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showPrivacyPolicy() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        final dialogTextTheme =
+        GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Text(
+            'Privacy Policy',
+            style: dialogTextTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Text(
+              '''This Privacy Policy describes how we collect, use, and protect your personal information.
+
+1. Information We Collect
+   • Account information (username, email, phone number)
+   • Profile information (name, bio, photos)
+   • Usage data and app activity
+   • Device information and location data
+
+2. How We Use Your Information
+   • To provide and improve our services
+   • To communicate with you
+   • To personalize your experience
+   • To ensure app security and prevent fraud
+
+3. Information Sharing
+   • We do not sell your personal information
+   • We may share information with service providers
+   • We may disclose information if required by law
+
+4. Data Security
+   • We implement security measures to protect your data
+   • However, no method of transmission is 100% secure
+   • You use the app at your own risk
+
+5. Your Rights
+   • You can access and update your personal information
+   • You can request deletion of your account
+   • You can opt-out of certain communications
+
+6. Cookies and Tracking
+   • We use cookies and similar technologies
+   • You can manage cookie preferences in your device settings
+
+7. Children's Privacy
+   • Our app is not intended for users under 13 years of age
+   • We do not knowingly collect information from children
+
+8. Changes to Privacy Policy
+   • We may update this policy from time to time
+   • We will notify you of significant changes
+
+9. Contact Us
+   • If you have questions about this Privacy Policy, please contact us
+
+Last updated: ${DateTime.now().year}''',
+              style: dialogTextTheme.bodyMedium,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                'Close',
+                style: dialogTextTheme.labelLarge?.copyWith(
+                  color: kSecondaryColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _signin() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    setState(() => _isLoading = true);
+
+    String input = _usernameController.text.trim();
+    String password = _passwordController.text.trim();
+
+    try {
+      String email = '';
+
+      // If input looks like an email
+      if (input.contains('@')) {
+        email = input;
+      } else {
+        // Otherwise, search by username or mobile
+        QuerySnapshot querySnapshot = await _firestore
+            .collection('users')
+            .where('username', isEqualTo: input)
+            .get();
+
+        if (querySnapshot.docs.isEmpty) {
+          querySnapshot = await _firestore
+              .collection('users')
+              .where('mobile', isEqualTo: input)
+              .get();
+        }
+
+        if (querySnapshot.docs.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('User not found!')),
+          );
+          setState(() => _isLoading = false);
+          return;
+        }
+
+        email = querySnapshot.docs.first['email'];
+      }
+
+      // Login using Firebase Auth
+      UserCredential userCredential =
+      await _auth.signInWithEmailAndPassword(email: email, password: password);
+
+      // Update last seen
+      await _firestore.collection('users').doc(userCredential.user!.uid).set(
+        {
+          'lastSeen': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Login Successful')),
+      );
+
+      // Backfill interests from Firestore if present
+      try {
+        final uid = userCredential.user!.uid;
+        final doc = await _firestore.collection('users').doc(uid).get();
+        final interests = (doc.data()?['interests'] as List?)
+            ?.map((e) => e.toString())
+            .toList() ??
+            [];
+        if (interests.isNotEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setStringList('user_interests', interests.cast<String>());
+          await prefs.setBool('interests_completed', true);
+        }
+      } catch (_) {}
+
+      // After login, route to interests if not completed yet
+      final prefs = await SharedPreferences.getInstance();
+      final completed = prefs.getBool('interests_completed') ?? false;
+      if (!completed) {
+        await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(builder: (_) => const InterestSelectionPage()),
+        );
+      }
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => HomePage()),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Login Failed: ${e.toString()}')),
+      );
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  InputDecoration _inputDecoration({
+    required String label,
+    required String hint,
+    Widget? prefixIcon,
+    Widget? suffixIcon,
+  }) {
+    final textTheme = GoogleFonts.poppinsTextTheme(
+      Theme.of(context).textTheme,
+    );
+
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      labelStyle: textTheme.labelMedium?.copyWith(
+        color: Colors.grey.shade300,
+        fontWeight: FontWeight.w500,
+      ),
+      hintStyle: textTheme.bodySmall?.copyWith(
+        color: Colors.grey.shade500,
+      ),
+      filled: true,
+      fillColor: Colors.white.withOpacity(0.05),
+      prefixIcon: prefixIcon,
+      suffixIcon: suffixIcon,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide.none,
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(
+          color: kPrimaryColor,
+          width: 1.5,
+        ),
+      ),
+      contentPadding:
+      const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = GoogleFonts.poppinsTextTheme(
+      Theme.of(context).textTheme,
+    );
+
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              kDarkBackgroundTop,
+              kDarkBackgroundBottom,
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 430),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(height: 20),
+
+                    // Brand title
+                    Text(
+                      "Halo.",
+                      style: GoogleFonts.pacifico(
+                        fontSize: 38,
+                        fontWeight: FontWeight.bold,
+                        fontStyle: FontStyle.italic,
+                        color: kPrimaryColor,
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+
+                    // Main card
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 24),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.78),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: kPrimaryColor.withOpacity(0.25),
+                            blurRadius: 28,
+                            spreadRadius: -10,
+                            offset: const Offset(0, 18),
+                          ),
+                        ],
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.18),
+                          width: 0.9,
+                        ),
+                      ),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          children: [
+                            // Username / Email / Phone
+                            TextFormField(
+                              controller: _usernameController,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: _inputDecoration(
+                                label: "Login ID",
+                                hint: "Username / Mobile No. / Email ID",
+                                prefixIcon: const Icon(
+                                  Icons.person_outline_rounded,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                              validator: (value) {
+                                if (value == null || value.isEmpty) {
+                                  return 'Please enter your username, mobile or email';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
+
+                            // Password
+                            TextFormField(
+                              controller: _passwordController,
+                              style: const TextStyle(color: Colors.white),
+                              obscureText: _obscurePassword,
+                              decoration: _inputDecoration(
+                                label: "Password / OTP",
+                                hint: "Enter your password or OTP",
+                                prefixIcon: const Icon(
+                                  Icons.lock_outline_rounded,
+                                  color: Colors.white70,
+                                ),
+                                suffixIcon: IconButton(
+                                  icon: Icon(
+                                    _obscurePassword
+                                        ? Icons.visibility_off_rounded
+                                        : Icons.visibility_rounded,
+                                    color: Colors.white70,
+                                  ),
+                                  onPressed: () {
+                                    setState(() {
+                                      _obscurePassword = !_obscurePassword;
+                                    });
+                                  },
+                                ),
+                              ),
+                              validator: (value) {
+                                if (value == null || value.isEmpty) {
+                                  return 'Please enter a password';
+                                }
+                                if (value.length < 8) {
+                                  return 'Password must be at least 8 characters long';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 18),
+
+                            // Sign in button
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: _isLoading ? null : _signin,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: kPrimaryColor,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 13),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                ),
+                                child: _isLoading
+                                    ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor:
+                                    AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
+                                  ),
+                                )
+                                    : Text(
+                                  "Sign In",
+                                  style:
+                                  textTheme.labelLarge?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    // Bottom row: create account / forgot password
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              "New here? ",
+                              style: textTheme.bodySmall
+                                  ?.copyWith(color: Colors.white70),
+                            ),
+                            GestureDetector(
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (context) => CategoryPage()),
+                                );
+                              },
+                              child: Text(
+                                "Create account",
+                                style: textTheme.bodySmall?.copyWith(
+                                  color: kPrimaryColor,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => ForgotPasswordPage(),
+                              ),
+                            );
+                          },
+                          child: Text(
+                            "Forgot Password?",
+                            style: textTheme.bodySmall?.copyWith(
+                              color: kPrimaryColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 32),
+
+                    // Social login
+                    Text(
+                      "Login with Social",
+                      style: textTheme.titleSmall?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    Column(
+                      children: [
+                        GoogleSignInButton(),
+                        const SizedBox(height: 8),
+                        const SocialButton(text: "Login with Facebook"),
+                        const SocialButton(text: "Login with Instagram"),
+                      ],
+                    ),
+
+                    const SizedBox(height: 36),
+
+                    // Footer links
+                    Column(
+                      children: [
+                        GestureDetector(
+                          onTap: _showTermsAndConditions,
+                          child: Text(
+                            "Terms & Conditions",
+                            style: textTheme.bodySmall?.copyWith(
+                              color: kPrimaryColor,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        GestureDetector(
+                          onTap: _showPrivacyPolicy,
+                          child: Text(
+                            "Policy",
+                            style: textTheme.bodySmall?.copyWith(
+                              color: kPrimaryColor,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SocialButton extends StatelessWidget {
+  final String text;
+
+  const SocialButton({super.key, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = GoogleFonts.poppinsTextTheme(
+      Theme.of(context).textTheme,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: SizedBox(
+        width: MediaQuery.of(context).size.width * 0.6,
+        child: OutlinedButton(
+          onPressed: () {},
+          style: OutlinedButton.styleFrom(
+            backgroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            side: BorderSide(color: kPrimaryColor.withOpacity(0.3)),
+          ),
+          child: Text(
+            text,
+            style: textTheme.labelLarge?.copyWith(
+              color: kSecondaryColor,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

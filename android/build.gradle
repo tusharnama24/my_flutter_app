@@ -1,0 +1,44 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.3.2'
+        classpath 'com.google.gms:google-services:4.4.2'
+        classpath 'com.google.gms:google-services:4.4.2'
+
+        //classpath 'com.google.gms.google-services' version '4.4.2' //apply false
+    }
+}
+
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        jcenter() // Required for Spotify SDK (legacy)
+    }
+}
+
+rootProject.buildDir = "../build"
+
+dependencies {
+    //implementation 'com.google.android.gms:play-services:12.0.1'
+
+}
+
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
+
+
+
