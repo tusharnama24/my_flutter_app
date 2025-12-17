@@ -4,13 +4,13 @@ set -e
 # Install Flutter
 git clone https://github.com/flutter/flutter.git -b stable
 
-# Add Flutter to PATH (important)
-export PATH="$PATH:$PWD/flutter/bin"
+# Add Flutter to PATH
+export PATH="$PWD/flutter/bin:$PATH"
 
-# Verify Flutter
+# Check Flutter
 flutter doctor
 
-# Get packages
+# Get dependencies
 flutter pub get
 
 # Build web
