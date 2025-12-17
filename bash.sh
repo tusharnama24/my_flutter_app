@@ -1,22 +1,10 @@
 #!/bin/bash
 set -e
 
-# Clone Flutter only if not already present
-if [ ! -d "flutter" ]; then
-  echo "Cloning Flutter SDK..."
-  git clone https://github.com/flutter/flutter.git -b stable
-else
-  echo "Flutter SDK already exists, skipping clone."
-fi
+echo "Removing old Flutter SDK if exists..."
+rm -rf flutter
 
-# Add Flutter to PATH
+echo "Cloning Flutter SDK..."
+git clone https://github.com/flutter/flutter.git -b stable
+
 export PATH="$PWD/flutter/bin:$PATH"
-
-# Verify Flutter
-flutter doctor
-
-# Get dependencies
-flutter pub get
-
-# Build web
-flutter build web
