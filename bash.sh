@@ -1,13 +1,18 @@
 #!/bin/bash
 set -e
 
-# Install Flutter
-git clone https://github.com/flutter/flutter.git -b stable
+# Clone Flutter only if not already present
+if [ ! -d "flutter" ]; then
+  echo "Cloning Flutter SDK..."
+  git clone https://github.com/flutter/flutter.git -b stable
+else
+  echo "Flutter SDK already exists, skipping clone."
+fi
 
 # Add Flutter to PATH
 export PATH="$PWD/flutter/bin:$PATH"
 
-# Check Flutter
+# Verify Flutter
 flutter doctor
 
 # Get dependencies
