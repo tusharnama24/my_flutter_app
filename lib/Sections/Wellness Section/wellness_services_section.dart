@@ -1,95 +1,248 @@
-import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+// wellness_services_section.dart
+// SERVICES + AVAILABILITY + INTEREST TRACKING
 
-class WellnessServicesSection extends StatelessWidget {
-  final bool isOwnProfile;
-  final List<Map<String, dynamic>> services;
-  final VoidCallback? onEdit;
+import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+class WellnessServicesSection extends StatefulWidget {
+  final String wellnessUserId;
+  final bool isOwner;
 
   const WellnessServicesSection({
     Key? key,
-    required this.isOwnProfile,
-    required this.services,
-    this.onEdit,
+    required this.wellnessUserId,
+    required this.isOwner,
   }) : super(key: key);
 
   @override
-  Widget build(BuildContext context) {
-    if (services.isEmpty && !isOwnProfile) return const SizedBox.shrink();
+  State<WellnessServicesSection> createState() =>
+      _WellnessServicesSectionState();
+}
 
+class _WellnessServicesSectionState extends State<WellnessServicesSection> {
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  Future<void> _addServiceDialog() async {
+    final titleCtrl = TextEditingController();
+    final priceCtrl = TextEditingController();
+    final durationCtrl = TextEditingController();
+    String availability = 'Available';
+
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Add Service'),
+        content: SingleChildScrollView(
+          child: Column(
+            children: [
+              TextField(
+                controller: titleCtrl,
+                decoration:
+                const InputDecoration(labelText: 'Service title'),
+              ),
+              TextField(
+                controller: priceCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Price'),
+              ),
+              TextField(
+                controller: durationCtrl,
+                decoration:
+                const InputDecoration(labelText: 'Duration (eg 60 min)'),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: availability,
+                items: const [
+                  DropdownMenuItem(
+                      value: 'Available', child: Text('Available')),
+                  DropdownMenuItem(
+                      value: 'Limited', child: Text('Limited')),
+                  DropdownMenuItem(
+                      value: 'Full', child: Text('Full')),
+                ],
+                onChanged: (v) => availability = v!,
+                decoration:
+                const InputDecoration(labelText: 'Availability'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              if (titleCtrl.text.isEmpty) return;
+
+              await _firestore
+                  .collection('users')
+                  .doc(widget.wellnessUserId)
+                  .collection('services')
+                  .add({
+                'title': titleCtrl.text.trim(),
+                'price': priceCtrl.text.trim(),
+                'duration': durationCtrl.text.trim(),
+                'availability': availability,
+                'createdAt': FieldValue.serverTimestamp(),
+              });
+
+              Navigator.pop(context);
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _registerInterest(String serviceId) async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    await _firestore.collection('service_interests').add({
+      'wellnessId': widget.wellnessUserId,
+      'serviceId': serviceId,
+      'userId': user.uid,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Color _availabilityColor(String v) {
+    switch (v) {
+      case 'Available':
+        return Colors.green;
+      case 'Limited':
+        return Colors.orange;
+      case 'Full':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ---------- HEADER ----------
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
+              const Text(
                 'Services',
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
-              if (isOwnProfile)
+              if (widget.isOwner)
                 IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: onEdit,
+                  icon: const Icon(Icons.add),
+                  onPressed: _addServiceDialog,
                 ),
             ],
           ),
-          const SizedBox(height: 10),
-          if (services.isEmpty)
-            Text(
-              'Add your services to attract users',
-              style: GoogleFonts.poppins(color: Colors.grey),
-            )
-          else
-            ...services.map((s) {
-              return Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 8,
-                      offset: const Offset(0, 4),
-                    )
-                  ],
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
+
+          // ---------- SERVICES LIST ----------
+          StreamBuilder<QuerySnapshot>(
+            stream: _firestore
+                .collection('users')
+                .doc(widget.wellnessUserId)
+                .collection('services')
+                .orderBy('createdAt', descending: true)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+
+              final docs = snapshot.data?.docs ?? [];
+
+              if (docs.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  child: Text(
+                    widget.isOwner
+                        ? 'Add your first service'
+                        : 'No services available',
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                );
+              }
+
+              return Column(
+                children: docs.map((d) {
+                  final data = d.data() as Map<String, dynamic>;
+                  final availability = data['availability'] ?? 'Available';
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 6,
+                        )
+                      ],
+                    ),
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          s['title'] ?? 'Service',
-                          style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.w600,
-                          ),
+                          data['title'] ?? '',
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          s['duration'] ?? '',
-                          style: GoogleFonts.poppins(fontSize: 12),
+                          '${data['duration']} • ₹${data['price']}',
+                          style:
+                          const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisAlignment:
+                          MainAxisAlignment.spaceBetween,
+                          children: [
+                            Chip(
+                              label: Text(availability),
+                              backgroundColor:
+                              _availabilityColor(availability)
+                                  .withOpacity(0.15),
+                            ),
+                            ElevatedButton(
+                              onPressed: availability == 'Full'
+                                  ? null
+                                  : () {
+                                _registerInterest(d.id);
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Interest registered')),
+                                );
+                              },
+                              child: const Text('Interested'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                    Text(
-                      s['price'] ?? '',
-                      style: GoogleFonts.poppins(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
+                  );
+                }).toList(),
               );
-            }).toList(),
+            },
+          ),
         ],
       ),
     );

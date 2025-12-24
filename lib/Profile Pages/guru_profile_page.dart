@@ -27,6 +27,35 @@ import '../Sections/Guru Section/guru_students_section.dart';
 import '../Sections/Guru Section/guru_analytics_section.dart';
 
 // ===================================================================
+//  SLIVER APP BAR DELEGATE (for TabBar)
+// ===================================================================
+class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
+  final TabBar tabBar;
+
+  _SliverAppBarDelegate(this.tabBar);
+
+  @override
+  double get minExtent => tabBar.preferredSize.height;
+
+  @override
+  double get maxExtent => tabBar.preferredSize.height;
+
+  @override
+  Widget build(
+      BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return Container(
+      color: Colors.white,
+      child: tabBar,
+    );
+  }
+
+  @override
+  bool shouldRebuild(_SliverAppBarDelegate oldDelegate) {
+    return false;
+  }
+}
+
+// ===================================================================
 //  GURU PROFILE PAGE
 // ===================================================================
 
@@ -110,6 +139,12 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   Map<String, String> _socialLinks = {};
   List<String> _galleryImages = [];
 
+  // -------------------- FIRST TAB DATA --------------------
+  List<Map<String, dynamic>> _recentPosts = [];
+  List<Map<String, dynamic>> _reviews = [];
+  List<Map<String, dynamic>> _programs = [];
+  List<Map<String, dynamic>> _lastWorkouts = [];
+
   // -------------------- UI CONSTANTS --------------------
   static const double _coverHeight = 220.0;
   static const double _avatarSize = 90.0;
@@ -131,12 +166,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   bool _isCameraInitialized = false;
 
   late final AnimationController _followAnimController;
+  late final TabController _tabController;
 
   @override
   void initState() {
     super.initState();
     _followAnimController =
         AnimationController(vsync: this, duration: const Duration(milliseconds: 350));
+    _tabController = TabController(length: 2, vsync: this);
     _loadProfileData();
   }
 
@@ -144,6 +181,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   void dispose() {
     _cameraController?.dispose();
     _followAnimController.dispose();
+    _tabController.dispose();
     super.dispose();
   }
 
@@ -480,6 +518,150 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         _galleryImages = gal is List
             ? gal.map((e) => e.toString()).toList()
             : <String>[];
+
+        // Load posts for first tab
+        try {
+          QuerySnapshot<Map<String, dynamic>> postsSnapshot;
+          try {
+            postsSnapshot = await _firestore
+                .collection('posts')
+                .where('userId', isEqualTo: widget.profileUserId)
+                .orderBy('timestamp', descending: true)
+                .limit(9)
+                .get();
+          } catch (_) {
+            // Try with createdAt if timestamp doesn't work
+            try {
+              postsSnapshot = await _firestore
+                  .collection('posts')
+                  .where('userId', isEqualTo: widget.profileUserId)
+                  .orderBy('createdAt', descending: true)
+                  .limit(9)
+                  .get();
+            } catch (_) {
+              // If both fail, get without orderBy
+              postsSnapshot = await _firestore
+                  .collection('posts')
+                  .where('userId', isEqualTo: widget.profileUserId)
+                  .limit(9)
+                  .get();
+            }
+          }
+
+          _recentPosts = postsSnapshot.docs.map((doc) {
+            final d = doc.data() as Map<String, dynamic>;
+            return <String, dynamic>{
+              'id': doc.id,
+              'imageUrl': d['imageUrl'] ?? '',
+              'caption': d['caption'] ?? '',
+              'timestamp': d['timestamp'] ?? d['createdAt'],
+            };
+          }).toList();
+        } catch (e) {
+          debugPrint('Error loading posts: $e');
+          _recentPosts = [];
+        }
+
+        // Load reviews for first tab
+        try {
+          // Try reviews collection first
+          QuerySnapshot<Map<String, dynamic>>? reviewsSnapshot;
+          try {
+            reviewsSnapshot = await _firestore
+                .collection('reviews')
+                .where('guruId', isEqualTo: widget.profileUserId)
+                .orderBy('createdAt', descending: true)
+                .limit(2)
+                .get();
+          } catch (_) {
+            // If query fails (no index), try without orderBy
+            try {
+              reviewsSnapshot = await _firestore
+                  .collection('reviews')
+                  .where('guruId', isEqualTo: widget.profileUserId)
+                  .limit(2)
+                  .get();
+            } catch (_) {
+              reviewsSnapshot = null;
+            }
+          }
+
+          if (reviewsSnapshot != null && reviewsSnapshot.docs.isNotEmpty) {
+            _reviews = reviewsSnapshot.docs.map((doc) {
+              final d = doc.data() as Map<String, dynamic>;
+              return <String, dynamic>{
+                'id': doc.id,
+                'name': d['userName'] ?? d['name'] ?? 'User',
+                'rating': d['rating'] ?? 5,
+                'text': d['text'] ?? '',
+                'createdAt': d['createdAt'],
+                'profilePhoto': d['profilePhoto'],
+              };
+            }).toList();
+          } else {
+            // Fallback to user document reviews array
+            final reviewsRaw = data['reviews'];
+            if (reviewsRaw is List && reviewsRaw.isNotEmpty) {
+              _reviews = reviewsRaw
+                  .take(2)
+                  .map((e) => Map<String, dynamic>.from(e as Map))
+                  .toList();
+            } else {
+              _reviews = [];
+            }
+          }
+        } catch (e) {
+          debugPrint('Error loading reviews: $e');
+          final reviewsRaw = data['reviews'];
+          _reviews = reviewsRaw is List && reviewsRaw.isNotEmpty
+              ? reviewsRaw
+                  .take(2)
+                  .map((e) => Map<String, dynamic>.from(e as Map))
+                  .toList()
+              : [];
+        }
+
+        // Load programs/services (from classes or popularProducts)
+        try {
+          if (_classes.isNotEmpty) {
+            _programs = _classes.take(5).map((cls) {
+              return <String, dynamic>{
+                'id': cls['id'] ?? '',
+                'name': cls['name'] ?? 'Program',
+                'duration': cls['schedule'] ?? 'Ongoing',
+                'imageUrl': cls['imageUrl'],
+                'price': cls['price'] ?? 0,
+              };
+            }).toList();
+          } else {
+            final productsRaw = data['popularProducts'];
+            if (productsRaw is List && productsRaw.isNotEmpty) {
+              _programs = productsRaw.take(5).map((p) {
+                return Map<String, dynamic>.from(p as Map);
+              }).toList();
+            } else {
+              _programs = [];
+            }
+          }
+        } catch (e) {
+          debugPrint('Error loading programs: $e');
+          _programs = [];
+        }
+
+        // Load last workouts
+        try {
+          final workoutsRaw = data['lastWorkouts'];
+          if (workoutsRaw is List && workoutsRaw.isNotEmpty) {
+            _lastWorkouts = workoutsRaw.take(3).map((w) {
+              return Map<String, dynamic>.from(w as Map);
+            }).toList();
+          } else {
+            _lastWorkouts = [];
+          }
+        } catch (e) {
+          debugPrint('Error loading workouts: $e');
+          _lastWorkouts = [];
+        }
       }
 
       // follow status
@@ -1466,146 +1648,2081 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         backgroundColor: _bg,
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())
-            : CustomScrollView(
-          slivers: [
-            SliverAppBar(
-              pinned: true,
-              expandedHeight: _coverHeight,
-              backgroundColor: _lavender,
-              elevation: 0,
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => Navigator.pop(context),
-              ),
-              actions: [
-                if (_isOwnProfile) ...[
-                  IconButton(
-                    icon: const Icon(Icons.add_box_outlined),
-                    onPressed: _openGalleryForPost,
-                  ),
-                  PopupMenuButton<String>(
-                    onSelected: (value) async {
-                      if (value == 'Edit Profile') {
-                        await _handleEditProfile();
-                      } else if (value == 'Privacy') {
-                        if (_currentUser == null) return;
-                        final updated = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (ctx) => PrivacySettingsPage(
-                              initialPrivacy: _isPrivate,
+            : NestedScrollView(
+          headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
+            return [
+              SliverAppBar(
+                pinned: true,
+                expandedHeight: _coverHeight,
+                backgroundColor: _lavender,
+                elevation: 0,
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => Navigator.pop(context),
+                ),
+                actions: [
+                  if (_isOwnProfile) ...[
+                    IconButton(
+                      icon: const Icon(Icons.add_box_outlined),
+                      onPressed: _openGalleryForPost,
+                    ),
+                    PopupMenuButton<String>(
+                      onSelected: (value) async {
+                        if (value == 'Edit Profile') {
+                          await _handleEditProfile();
+                        } else if (value == 'Privacy') {
+                          if (_currentUser == null) return;
+                          final updated = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (ctx) => PrivacySettingsPage(
+                                initialPrivacy: _isPrivate,
+                              ),
                             ),
-                          ),
-                        );
-                        if (updated != null) {
-                          try {
-                            await _firestore
-                                .collection('users')
-                                .doc(_currentUser!.uid)
-                                .update({'isPrivate': updated});
-                            setState(() => _isPrivate = updated);
-                          } catch (e) {
-                            Fluttertoast.showToast(
-                                msg: 'Failed to update privacy');
+                          );
+                          if (updated != null) {
+                            try {
+                              await _firestore
+                                  .collection('users')
+                                  .doc(_currentUser!.uid)
+                                  .update({'isPrivate': updated});
+                              setState(() => _isPrivate = updated);
+                            } catch (e) {
+                              Fluttertoast.showToast(
+                                  msg: 'Failed to update privacy');
+                            }
                           }
-                        }
-                      } else if (value == 'Settings') {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (ctx) => SettingsPage(),
-                          ),
-                        );
-                        if (result == 'logout') {
+                        } else if (value == 'Settings') {
+                          final result = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (ctx) => SettingsPage(),
+                            ),
+                          );
+                          if (result == 'logout') {
+                            await _signOut();
+                          }
+                        } else if (value == 'Logout') {
                           await _signOut();
                         }
-                      } else if (value == 'Logout') {
-                        await _signOut();
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                        value: 'Settings',
-                        child: Text('Settings'),
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(
+                          value: 'Settings',
+                          child: Text('Settings'),
+                        ),
+                        PopupMenuItem(
+                          value: 'Privacy',
+                          child: Text('Privacy'),
+                        ),
+                        PopupMenuItem(
+                          value: 'Edit Profile',
+                          child: Text('Edit Profile'),
+                        ),
+                        PopupMenuItem(
+                          value: 'Logout',
+                          child: Text('Logout'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+                flexibleSpace: FlexibleSpaceBar(
+                  background: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _coverWidget(context),
+                    ],
+                  ),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: _buildProfileHeaderSection(),
+              ),
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _SliverAppBarDelegate(
+                  TabBar(
+                    controller: _tabController,
+                    indicatorColor: _lavender,
+                    indicatorWeight: 3,
+                    labelColor: Colors.black87,
+                    unselectedLabelColor: Colors.black54,
+                    labelStyle: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    unselectedLabelStyle: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.normal,
+                    ),
+                    tabs: const [
+                      Tab(
+                        icon: Icon(Icons.grid_on_outlined, size: 24),
                       ),
-                      PopupMenuItem(
-                        value: 'Privacy',
-                        child: Text('Privacy'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Edit Profile',
-                        child: Text('Edit Profile'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Logout',
-                        child: Text('Logout'),
+                      Tab(
+                        icon: Icon(Icons.dashboard_outlined, size: 24),
                       ),
                     ],
                   ),
-                ],
-              ],
-              flexibleSpace: FlexibleSpaceBar(
-                background: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    _coverWidget(context),
-                  ],
+                ),
+              ),
+            ];
+          },
+          body: TabBarView(
+            controller: _tabController,
+            children: [
+              // First Tab - Posts/Content (placeholder for future features)
+              _buildFirstTab(),
+              // Second Tab - Existing Guru Sections
+              _buildSecondTab(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ===================================================================
+  //  TAB CONTENT BUILDERS
+  // ===================================================================
+  Widget _buildFirstTab() {
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 20),
+              // CTA Buttons
+              _buildCTAButtons(),
+              const SizedBox(height: 24),
+              // Popular Products Section (Figma Design)
+              _buildPopularProductsSection(),
+              const SizedBox(height: 24),
+              // Last Workouts Section (Figma Design)
+              _buildLastWorkoutsSection(),
+              const SizedBox(height: 24),
+              // Recent Posts (Figma Design - Full Cards)
+              _buildRecentPostsSection(),
+              const SizedBox(height: 24),
+              // Specializations (Figma Design - Red Background)
+              _buildSpecializationsSection(),
+              const SizedBox(height: 24),
+              // Reviews & Ratings (Figma Design - Grey Background)
+              _buildReviewsSection(),
+              const SizedBox(height: 24),
+              // Social Links (Figma Design - YouTube, Apple Music, Instagram)
+              _buildSocialLinksSection(),
+              const SizedBox(height: 24),
+              // Footer
+              _buildFooter(),
+              const SizedBox(height: 40),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ===================================================================
+  //  FIRST TAB SECTION BUILDERS
+  // ===================================================================
+  Widget _buildCTAButtons() {
+    if (_isOwnProfile) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Expanded(
+            child: ElevatedButton(
+              onPressed: _toggleFollow,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _lavender,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+                elevation: 2,
+              ),
+              child: Text(
+                _isFollowing ? 'Following' : 'Follow',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
                 ),
               ),
             ),
-            SliverToBoxAdapter(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton(
+              onPressed: _openMessage,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+                side: BorderSide(color: Colors.grey.shade300),
+              ),
+              child: Text(
+                'DM',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                  color: Colors.black87,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton(
+              onPressed: _handleBookNow,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _deepLavender,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+                elevation: 2,
+              ),
+              child: Text(
+                'Book',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBioSection() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20.0),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'About',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              if (_isOwnProfile)
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined, size: 20),
+                  onPressed: _editBio,
+                  color: _lavender,
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (_bio.isNotEmpty)
+            Text(
+              _bio,
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                height: 1.5,
+                color: Colors.black87,
+              ),
+            )
+          else if (_isOwnProfile)
+            TextButton.icon(
+              onPressed: _editBio,
+              icon: const Icon(Icons.add_circle_outline, size: 18),
+              label: const Text('Add bio'),
+              style: TextButton.styleFrom(foregroundColor: _lavender),
+            )
+          else
+            Text(
+              'No bio available',
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: Colors.black54,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          if (_bio.isNotEmpty) const SizedBox(height: 12),
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: [
+              if (_experienceYears != null)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.emoji_events_outlined,
+                        size: 16, color: Colors.black87),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Experience: $_experienceYears years',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              if (_languages.isNotEmpty)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.language_outlined,
+                        size: 16, color: Colors.black87),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Languages: ${_languages.join(', ')}',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              if (_city.isNotEmpty)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.location_on_outlined,
+                        size: 16, color: Colors.black87),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Location: $_city',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editBio() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final controller = TextEditingController(text: _bio);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          'Edit Bio',
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+        ),
+        content: TextField(
+          controller: controller,
+          maxLines: 4,
+          decoration: InputDecoration(
+            hintText: 'Tell people about yourself...',
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null) {
+      try {
+        await _firestore
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .update({'bio': result});
+        setState(() => _bio = result);
+        Fluttertoast.showToast(msg: 'Bio updated');
+      } catch (e) {
+        Fluttertoast.showToast(msg: 'Failed to update bio');
+      }
+    }
+  }
+
+  Widget _buildSpecializationsSection() {
+    // Mock ratings for specialties (can be stored in Firestore)
+    final specialtyRatings = [3.5, 4.0, 3.0, 2.0];
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Text(
+            'Specialties (with certification)',
+            style: GoogleFonts.poppins(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_specialties.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: _isOwnProfile
+                ? TextButton.icon(
+                    onPressed: _editSpecializations,
+                    icon: const Icon(Icons.add_circle_outline, size: 18),
+                    label: const Text('Add specializations'),
+                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                  )
+                : Text(
+                    'No specializations yet',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      color: Colors.black54,
+                    ),
+                  ),
+          )
+        else
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 20.0),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.red[50],
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: _specialties.asMap().entries.map((entry) {
+                final index = entry.key;
+                final specialty = entry.value;
+                final rating = index < specialtyRatings.length
+                    ? specialtyRatings[index]
+                    : 4.0;
+                
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index < _specialties.length - 1 ? 12 : 0,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        specialty,
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: List.generate(5, (i) {
+                          return Icon(
+                            i < rating.floor()
+                                ? Icons.star
+                                : (i < rating
+                                    ? Icons.star_half
+                                    : Icons.star_border),
+                            size: 16,
+                            color: Colors.amber[700],
+                          );
+                        }),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _editSpecializations() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final controller = TextEditingController(
+        text: _specialties.join(', '));
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          'Edit Specializations',
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+        ),
+        content: TextField(
+          controller: controller,
+          decoration: InputDecoration(
+            hintText: 'Enter specializations separated by commas',
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null) {
+      final specialties = result
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      try {
+        await _firestore
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .update({'specialties': specialties});
+        setState(() => _specialties = specialties);
+        Fluttertoast.showToast(msg: 'Specializations updated');
+      } catch (e) {
+        Fluttertoast.showToast(msg: 'Failed to update specializations');
+      }
+    }
+  }
+
+  Widget _buildGallerySection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Gallery',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              if (_isOwnProfile)
+                IconButton(
+                  icon: const Icon(Icons.add_photo_alternate_outlined, size: 20),
+                  onPressed: _addGalleryImage,
+                  color: _lavender,
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_galleryImages.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: _isOwnProfile
+                ? TextButton.icon(
+                    onPressed: _addGalleryImage,
+                    icon: const Icon(Icons.add_circle_outline, size: 18),
+                    label: const Text('Add gallery images'),
+                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                  )
+                : Text(
+                    'No gallery images',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      color: Colors.black54,
+                    ),
+                  ),
+          )
+        else
+          SizedBox(
+            height: 120,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              itemCount: _galleryImages.length,
+              itemBuilder: (context, index) {
+                return Container(
+                  width: 120,
+                  margin: const EdgeInsets.only(right: 12),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: Colors.grey[200],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.network(
+                      _galleryImages[index],
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const Icon(
+                          Icons.image_not_supported,
+                          color: Colors.grey),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _addGalleryImage() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+    final XFile? picked =
+        await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (picked == null) return;
+
+    try {
+      final fileName =
+          'gallery_${_currentUser!.uid}_${DateTime.now().millisecondsSinceEpoch}';
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child('users')
+          .child(_currentUser!.uid)
+          .child('gallery')
+          .child(fileName);
+      final snap = await ref.putFile(File(picked.path));
+      final url = await snap.ref.getDownloadURL();
+
+      final updated = List<String>.from(_galleryImages)..add(url);
+      await _firestore
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .update({'galleryImages': updated});
+      setState(() => _galleryImages = updated);
+      Fluttertoast.showToast(msg: 'Image added to gallery');
+    } catch (e) {
+      Fluttertoast.showToast(msg: 'Failed to add image');
+    }
+  }
+
+  Widget _buildPopularProductsSection() {
+    // Load products from user data
+    final products = _programs.isNotEmpty 
+        ? _programs 
+        : (widget.profileUserId == _currentUser?.uid 
+            ? [] 
+            : []);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildProfileHeaderSection(),
-
-                  // ---------- GURU SECTIONS ----------
-                  const SizedBox(height: 8),
-                  GuruBookingSection(
-                    guruid: widget.profileUserId,
-                    isOwnProfile: _isOwnProfile,
-                    bookingSettings: _bookingSettings,
-                    upcomingSessions: _upcomingSessions,
-                    pastSessions: _pastSessions,
-                    onManageSlots:
-                    _isOwnProfile ? _handleManageSlots : null,
-                    onBookNow: !_isOwnProfile ? _handleBookNow : null,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Popular Products',
+                        style: GoogleFonts.poppins(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      Text(
+                        'Check out my recommended fitness gear',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.black54,
+                        ),
+                      ),
+                    ],
                   ),
-                  GuruClassesSection(
-                    guruid: widget.profileUserId,
-                    isOwnProfile: _isOwnProfile,
-                    classes: _classes,
-                    specialties: _specialties,
-                    onManage:
-                    _isOwnProfile ? _handleManageClasses : null,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'View All',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.arrow_forward, size: 16),
+                      ],
+                    ),
                   ),
-                  GuruEarningsSection(
-                    guruid: widget.profileUserId,
-                    isOwnProfile: _isOwnProfile,
-                    earningsSummary: _earningsSummary,
-                    recentEarnings: _recentEarnings,
-                    onViewPayoutDetails: _isOwnProfile
-                        ? _handleViewPayoutDetails
-                        : null,
-                  ),
-                  GuruStudentsSection(
-                    guruid: widget.profileUserId,
-                    isOwnProfile: _isOwnProfile,
-                    students: _students,
-                  ),
-                  GuruAnalyticsSection(
-                    guruid: widget.profileUserId,
-                    isOwnProfile: _isOwnProfile,
-                    analytics: _analytics,
-                  ),
-
-                  const SizedBox(height: 80),
                 ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (products.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: _isOwnProfile
+                ? TextButton.icon(
+                    onPressed: _addProgram,
+                    icon: const Icon(Icons.add_circle_outline, size: 18),
+                    label: const Text('Add products'),
+                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                  )
+                : Text(
+                    'No products available',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      color: Colors.black54,
+                    ),
+                  ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildProductCard(
+                    products[0],
+                    tag: products[0]['tag']?.toString() ?? 'Best Seller',
+                  ),
+                ),
+                const SizedBox(width: 12),
+                if (products.length > 1)
+                  Expanded(
+                    child: _buildProductCard(
+                      products[1],
+                      tag: products[1]['tag']?.toString() ?? 'New Arrival',
+                    ),
+                  )
+                else
+                  Expanded(child: Container()),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildProductCard(Map<String, dynamic> product, {required String tag}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Stack(
+            children: [
+              Container(
+                height: 140,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.grey[200],
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(12),
+                  ),
+                ),
+                child: product['imageUrl'] != null &&
+                        product['imageUrl'].toString().isNotEmpty
+                    ? ClipRRect(
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(12),
+                        ),
+                        child: Image.network(
+                          product['imageUrl'].toString(),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Center(
+                            child: Icon(Icons.image, size: 40, color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    : const Center(
+                        child: Text(
+                          'Image-url',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+              ),
+              Positioned(
+                top: 8,
+                left: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: tag == 'Best Seller' ? Colors.orange : Colors.green,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    tag,
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  product['name']?.toString() ?? 'Product',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Price: ${product['price']?.toString() ?? 'Rs 0.00'}',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLastWorkoutsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Text(
+            'Last workouts',
+            style: GoogleFonts.poppins(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_lastWorkouts.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Text(
+              'No workouts yet',
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: Colors.black54,
+              ),
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Column(
+              children: _lastWorkouts.map((workout) {
+                final title = workout['title']?.toString() ?? 'Workout';
+                final duration = workout['duration']?.toString() ?? '0 mins';
+                final intensity = workout['intensity']?.toString() ?? '';
+                final calories = workout['calories']?.toString() ?? '';
+                
+                // Determine icon based on workout title
+                IconData workoutIcon = Icons.fitness_center;
+                Color iconColor = Colors.grey;
+                if (title.toLowerCase().contains('cardio') || 
+                    title.toLowerCase().contains('run')) {
+                  workoutIcon = Icons.directions_run;
+                  iconColor = Colors.orange;
+                } else if (title.toLowerCase().contains('zumba') || 
+                           title.toLowerCase().contains('dance')) {
+                  workoutIcon = Icons.music_note;
+                  iconColor = Colors.orange;
+                } else if (title.toLowerCase().contains('leg')) {
+                  workoutIcon = Icons.accessibility_new;
+                  iconColor = Colors.grey;
+                }
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 50,
+                        height: 50,
+                        decoration: BoxDecoration(
+                          color: iconColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(workoutIcon, color: iconColor, size: 28),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: GoogleFonts.poppins(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Duration: $duration',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (intensity.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: intensity.toLowerCase() == 'high'
+                                ? Colors.red[50]
+                                : Colors.blue[50],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'Intensity: $intensity',
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: intensity.toLowerCase() == 'high'
+                                  ? Colors.red[700]
+                                  : Colors.blue[700],
+                            ),
+                          ),
+                        )
+                      else if (calories.isNotEmpty)
+                        Text(
+                          'Calories Burned: $calories',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _addProgram() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final nameController = TextEditingController();
+    final durationController = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          'Add Program',
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: InputDecoration(
+                labelText: 'Program Name',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: durationController,
+              decoration: InputDecoration(
+                labelText: 'Duration (e.g., 4 weeks)',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
             ),
           ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (nameController.text.isNotEmpty) {
+                Navigator.pop(ctx, true);
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            child: const Text('Add'),
+          ),
+        ],
       ),
+    );
+
+    if (result == true && nameController.text.isNotEmpty) {
+      try {
+        final newProgram = {
+          'id': DateTime.now().millisecondsSinceEpoch.toString(),
+          'name': nameController.text,
+          'duration': durationController.text.isNotEmpty
+              ? durationController.text
+              : 'Ongoing',
+          'createdAt': FieldValue.serverTimestamp(),
+        };
+
+        final updated = List<Map<String, dynamic>>.from(_programs)..add(newProgram);
+        await _firestore
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .update({'popularProducts': updated});
+        setState(() => _programs = updated);
+        Fluttertoast.showToast(msg: 'Program added');
+      } catch (e) {
+        Fluttertoast.showToast(msg: 'Failed to add program');
+      }
+    }
+  }
+
+  Widget _buildRecentPostsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Recent Posts',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              if (_isOwnProfile)
+                IconButton(
+                  icon: const Icon(Icons.add_box_outlined, size: 20),
+                  onPressed: _openGalleryForPost,
+                  color: _lavender,
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _firestore
+              .collection('posts')
+              .where('userId', isEqualTo: widget.profileUserId)
+              .snapshots()
+              .handleError((error) {
+            debugPrint('Error in posts stream: $error');
+          }),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20.0, vertical: 20),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            if (snapshot.hasError) {
+              debugPrint('Posts stream error: ${snapshot.error}');
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                child: Column(
+                  children: [
+                    Icon(Icons.error_outline, color: Colors.red[300], size: 48),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Error loading posts',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.red,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            final allDocs = snapshot.data?.docs ?? [];
+            final sortedDocs = List.from(allDocs)
+              ..sort((a, b) {
+                try {
+                  final aTime = a.data();
+                  final bTime = b.data();
+                  if (aTime is! Map<String, dynamic> || bTime is! Map<String, dynamic>) {
+                    return 0;
+                  }
+                  final aTimestamp = aTime['timestamp'] ?? aTime['createdAt'];
+                  final bTimestamp = bTime['timestamp'] ?? bTime['createdAt'];
+                  if (aTimestamp == null) return 1;
+                  if (bTimestamp == null) return -1;
+                  if (aTimestamp is Timestamp && bTimestamp is Timestamp) {
+                    return bTimestamp.compareTo(aTimestamp);
+                  }
+                  return 0;
+                } catch (e) {
+                  debugPrint('Error sorting posts: $e');
+                  return 0;
+                }
+              });
+            final docs = sortedDocs.take(9).toList();
+            
+            if (docs.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                child: _isOwnProfile
+                    ? TextButton.icon(
+                        onPressed: _openGalleryForPost,
+                        icon: const Icon(Icons.add_circle_outline, size: 18),
+                        label: const Text('Create your first post'),
+                        style: TextButton.styleFrom(foregroundColor: _lavender),
+                      )
+                    : Column(
+                        children: [
+                          Icon(Icons.camera_alt_outlined,
+                              size: 64, color: Colors.grey[400]),
+                          const SizedBox(height: 12),
+                          Text(
+                            'No posts yet',
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              color: Colors.black54,
+                            ),
+                          ),
+                        ],
+                      ),
+              );
+            }
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              child: Column(
+                children: docs.take(2).map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final imageUrl = data['imageUrl']?.toString() ?? '';
+                  final caption = data['caption']?.toString() ?? '';
+                  final timestamp = data['timestamp'] ?? data['createdAt'];
+                  
+                  // Extract tags from caption (hashtags)
+                  final tags = RegExp(r'#\w+').allMatches(caption).map((m) => m.group(0)!).toList();
+                  
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.04),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Profile Header
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 20,
+                                backgroundColor: _lavender.withOpacity(0.2),
+                                backgroundImage: _profilePhotoUrl != null
+                                    ? NetworkImage(_profilePhotoUrl!)
+                                    : null,
+                                child: _profilePhotoUrl == null
+                                    ? Text(
+                                        _username.isNotEmpty
+                                            ? _username[0].toUpperCase()
+                                            : 'U',
+                                        style: GoogleFonts.poppins(
+                                          color: _lavender,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _username.isNotEmpty ? '@$_username' : '@user',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${_formatPostTime(timestamp)} - ${_city.isNotEmpty ? _city : "Gym"}',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 12,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.more_vert, size: 20),
+                                onPressed: () {},
+                                color: Colors.black54,
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Post Image
+                        if (imageUrl.isNotEmpty)
+                          Container(
+                            width: double.infinity,
+                            height: 300,
+                            color: Colors.grey[200],
+                            child: Image.network(
+                              imageUrl,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Center(
+                                child: Text('Image-url', style: TextStyle(color: Colors.grey)),
+                              ),
+                            ),
+                          )
+                        else
+                          Container(
+                            width: double.infinity,
+                            height: 300,
+                            color: Colors.grey[200],
+                            child: const Center(
+                              child: Text('Image-url', style: TextStyle(color: Colors.grey)),
+                            ),
+                          ),
+                        // Caption and Tags
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (caption.isNotEmpty)
+                                Text(
+                                  caption,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    color: Colors.black87,
+                                    height: 1.4,
+                                  ),
+                                ),
+                              if (tags.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: tags.map((tag) {
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey[200],
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      child: Text(
+                                        tag,
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 12,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildReviewsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Reviews & Ratings',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              if (!_isOwnProfile)
+                TextButton(
+                  onPressed: () {
+                    // TODO: Navigate to write review
+                  },
+                  child: Text(
+                    'Write a Review',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: _lavender,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _firestore
+              .collection('reviews')
+              .where('guruId', isEqualTo: widget.profileUserId)
+              .snapshots()
+              .handleError((error) {
+            debugPrint('Error in reviews stream: $error');
+          }),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20.0, vertical: 10),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+
+            if (snapshot.hasError) {
+              debugPrint('Reviews stream error: ${snapshot.error}');
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                child: Column(
+                  children: [
+                    Icon(Icons.error_outline, color: Colors.red[300], size: 48),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Error loading reviews',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.red,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            final allDocs = snapshot.data?.docs ?? [];
+            final sortedDocs = List.from(allDocs)
+              ..sort((a, b) {
+                try {
+                  final aTime = a.data();
+                  final bTime = b.data();
+                  if (aTime is! Map<String, dynamic> || bTime is! Map<String, dynamic>) {
+                    return 0;
+                  }
+                  final aTimestamp = aTime['createdAt'];
+                  final bTimestamp = bTime['createdAt'];
+                  if (aTimestamp == null) return 1;
+                  if (bTimestamp == null) return -1;
+                  if (aTimestamp is Timestamp && bTimestamp is Timestamp) {
+                    return bTimestamp.compareTo(aTimestamp);
+                  }
+                  return 0;
+                } catch (e) {
+                  debugPrint('Error sorting reviews: $e');
+                  return 0;
+                }
+              });
+            final docs = sortedDocs.take(2).toList();
+            if (docs.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                child: Column(
+                  children: [
+                    Icon(Icons.rate_review_outlined,
+                        size: 64, color: Colors.grey[400]),
+                    const SizedBox(height: 12),
+                    Text(
+                      'No reviews yet',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.black54,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 20.0),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.grey[200],
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: docs.map((doc) {
+                  final review = doc.data() as Map<String, dynamic>;
+                  final name = review['userName']?.toString() ??
+                      review['name']?.toString() ??
+                      'User';
+                  final rating = (review['rating'] ?? 4).toDouble();
+                  final text = review['text']?.toString() ?? '';
+                  
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: docs.indexOf(doc) < docs.length - 1 ? 16 : 0,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              name,
+                              style: GoogleFonts.poppins(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: List.generate(5, (i) {
+                                return Icon(
+                                  i < rating.floor()
+                                      ? Icons.star
+                                      : (i < rating
+                                          ? Icons.star_half
+                                          : Icons.star_border),
+                                  size: 16,
+                                  color: Colors.amber[700],
+                                );
+                              }),
+                            ),
+                          ],
+                        ),
+                        if (text.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            text,
+                            style: GoogleFonts.poppins(
+                              fontSize: 13,
+                              color: Colors.black87,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAchievementsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Achievements',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              if (_isOwnProfile)
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline, size: 20),
+                  onPressed: _addAchievement,
+                  color: _lavender,
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_achievements.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: _isOwnProfile
+                ? TextButton.icon(
+                    onPressed: _addAchievement,
+                    icon: const Icon(Icons.add_circle_outline, size: 18),
+                    label: const Text('Add achievements'),
+                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                  )
+                : Text(
+                    'No achievements yet',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      color: Colors.black54,
+                    ),
+                  ),
+          )
+        else
+          SizedBox(
+            height: 100,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              itemCount: _achievements.length,
+              itemBuilder: (context, index) {
+                final achievement = _achievements[index];
+                return Container(
+                  width: 120,
+                  margin: const EdgeInsets.only(right: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.emoji_events,
+                          size: 32, color: Colors.amber[700]),
+                      const SizedBox(height: 8),
+                      Text(
+                        achievement['title']?.toString() ?? 'Achievement',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _addAchievement() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final titleController = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          'Add Achievement',
+          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+        ),
+        content: TextField(
+          controller: titleController,
+          decoration: InputDecoration(
+            labelText: 'Achievement Title',
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (titleController.text.isNotEmpty) {
+                Navigator.pop(ctx, true);
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && titleController.text.isNotEmpty) {
+      try {
+        final newAchievement = {
+          'id': DateTime.now().millisecondsSinceEpoch.toString(),
+          'title': titleController.text,
+          'createdAt': FieldValue.serverTimestamp(),
+        };
+
+        final updated =
+            List<Map<String, dynamic>>.from(_achievements)..add(newAchievement);
+        await _firestore
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .update({'achievements': updated});
+        setState(() => _achievements = updated);
+        Fluttertoast.showToast(msg: 'Achievement added');
+      } catch (e) {
+        Fluttertoast.showToast(msg: 'Failed to add achievement');
+      }
+    }
+  }
+
+  Widget _buildSocialLinksSection() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Social Links',
+            style: GoogleFonts.poppins(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 20),
+          // YouTube Section
+          if (_socialLinks.containsKey('youtube') ||
+              _socialLinks.containsKey('YouTube'))
+            _buildYouTubeSection(),
+          // Apple Music Section
+          if (_socialLinks.containsKey('appleMusic') ||
+              _socialLinks.containsKey('Apple Music') ||
+              _socialLinks.containsKey('spotify'))
+            _buildAppleMusicSection(),
+          // Instagram Section
+          if (_socialLinks.containsKey('instagram') ||
+              _socialLinks.containsKey('Instagram'))
+            _buildInstagramSection(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildYouTubeSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.play_circle_filled, color: Colors.red[700], size: 24),
+            const SizedBox(width: 8),
+            Text(
+              'Youtube',
+              style: GoogleFonts.poppins(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: List.generate(3, (index) {
+            return Expanded(
+              child: Container(
+                margin: EdgeInsets.only(right: index < 2 ? 8 : 0),
+                height: 80,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Center(
+                  child: Text(
+                    'Youtube Thumbnail',
+                    style: TextStyle(fontSize: 10, color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  Widget _buildAppleMusicSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.music_note, color: Colors.pink[300], size: 24),
+            const SizedBox(width: 8),
+            Text(
+              'Apple music',
+              style: GoogleFonts.poppins(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        // Playlist names
+        Text(
+          'Playlist names',
+          style: GoogleFonts.poppins(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            color: Colors.black87,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 12,
+          children: [
+            _buildRadioOption('Beast workout', false),
+            _buildRadioOption('Anna\'s playlist', false),
+          ],
+        ),
+        const SizedBox(height: 16),
+        // Top artist names
+        Text(
+          'Top artist names',
+          style: GoogleFonts.poppins(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            color: Colors.black87,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 12,
+          children: [
+            _buildRadioOption('Drake', false),
+            _buildRadioOption('Travis Scott', false),
+            _buildRadioOption('Diljit Dosanjh', false),
+          ],
+        ),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  Widget _buildRadioOption(String label, bool selected) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.grey, width: 2),
+            color: selected ? _lavender : Colors.transparent,
+          ),
+          child: selected
+              ? const Icon(Icons.check, size: 14, color: Colors.white)
+              : null,
+        ),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: GoogleFonts.poppins(
+            fontSize: 13,
+            color: Colors.black87,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInstagramSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Colors.purple, Colors.pink, Colors.orange],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Icon(Icons.camera_alt, color: Colors.white, size: 16),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Instagram',
+              style: GoogleFonts.poppins(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'Recent posts',
+          style: GoogleFonts.poppins(
+            fontSize: 14,
+            color: Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: List.generate(3, (index) {
+            return Expanded(
+              child: Container(
+                margin: EdgeInsets.only(right: index < 2 ? 8 : 0),
+                height: 100,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.image, color: Colors.grey, size: 32),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFooter() {
+    return Container(
+      height: 60,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white,
+            _bg,
+            _lavender.withOpacity(0.1),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatReviewDate(dynamic date) {
+    if (date == null) return '';
+    try {
+      if (date is Timestamp) {
+        final reviewDate = date.toDate();
+        final now = DateTime.now();
+        final difference = now.difference(reviewDate);
+
+        if (difference.inDays == 0) {
+          return 'Today';
+        } else if (difference.inDays == 1) {
+          return 'Yesterday';
+        } else if (difference.inDays < 7) {
+          return '${difference.inDays} days ago';
+        } else if (difference.inDays < 30) {
+          return '${(difference.inDays / 7).floor()} weeks ago';
+        } else {
+          return '${reviewDate.day}/${reviewDate.month}/${reviewDate.year}';
+        }
+      }
+      return date.toString();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  String _formatPostTime(dynamic date) {
+    if (date == null) return 'Just now';
+    try {
+      if (date is Timestamp) {
+        final postDate = date.toDate();
+        final now = DateTime.now();
+        final difference = now.difference(postDate);
+
+        if (difference.inMinutes < 1) {
+          return 'Just now';
+        } else if (difference.inMinutes < 60) {
+          return '${difference.inMinutes} minutes ago';
+        } else if (difference.inHours < 24) {
+          return '${difference.inHours} hours ago';
+        } else if (difference.inDays < 7) {
+          return '${difference.inDays} days ago';
+        } else {
+          return '${postDate.day}/${postDate.month}/${postDate.year}';
+        }
+      }
+      return date.toString();
+    } catch (e) {
+      return 'Just now';
+    }
+  }
+
+  Widget _buildSecondTab() {
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 8),
+              GuruBookingSection(
+                guruid: widget.profileUserId,
+                isOwnProfile: _isOwnProfile,
+                bookingSettings: _bookingSettings,
+                upcomingSessions: _upcomingSessions,
+                pastSessions: _pastSessions,
+                onManageSlots:
+                _isOwnProfile ? _handleManageSlots : null,
+                onBookNow: !_isOwnProfile ? _handleBookNow : null,
+              ),
+              GuruClassesSection(
+                guruid: widget.profileUserId,
+                isOwnProfile: _isOwnProfile,
+                classes: _classes,
+                specialties: _specialties,
+                onManage:
+                _isOwnProfile ? _handleManageClasses : null,
+              ),
+              GuruEarningsSection(
+                guruid: widget.profileUserId,
+                isOwnProfile: _isOwnProfile,
+                earningsSummary: _earningsSummary,
+                recentEarnings: _recentEarnings,
+                onViewPayoutDetails: _isOwnProfile
+                    ? _handleViewPayoutDetails
+                    : null,
+              ),
+              GuruStudentsSection(
+                guruid: widget.profileUserId,
+                isOwnProfile: _isOwnProfile,
+                students: _students,
+              ),
+              GuruAnalyticsSection(
+                guruid: widget.profileUserId,
+                isOwnProfile: _isOwnProfile,
+                analytics: _analytics,
+              ),
+              const SizedBox(height: 80),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
