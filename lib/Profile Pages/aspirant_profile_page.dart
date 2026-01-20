@@ -3,7 +3,7 @@
 // -------------------- IMPORTS --------------------
 import 'dart:io';
 import 'package:camera/camera.dart';
-import 'package:classic_1/newpostpage.dart';
+import 'package:halo/newpostpage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -12,16 +12,18 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:classic_1/Profile Pages/guru_profile_page.dart' as guru_profile;
-import 'package:classic_1/Profile Pages/wellness_profile_page.dart' as wellness_profile;
+import 'package:halo/Profile Pages/guru_profile_page.dart' as guru_profile;
+import 'package:halo/Profile Pages/wellness_profile_page.dart' as wellness_profile;
+import 'package:url_launcher/url_launcher.dart';
+import 'package:halo/chat/chat_screen.dart';
+import 'package:halo/chat/chat_service.dart';
 
 
 // Local pages (paths adjust kar lena agar different ho)
 import '../editprofilepage.dart';
 import '../main.dart'; // LoginPage
-import 'package:classic_1/Bottom Pages/PrivacySettingsPage.dart';
-import 'package:classic_1/Bottom Pages/SettingsPage.dart';
-import '../spotify_player_widget.dart'; // optional, tum use kar sakte ho
+import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
+import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'edit_profile_sections.dart'; // Edit pages for profile sections
 
 // ===================================================================
@@ -84,6 +86,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   Map<String, String> _socialLinks = {};
   List<String> _badges = [];                            // Achievements / badges
   String? _primaryCategory;                             // main hobby (e.g. Cricket)
+  List<Map<String, dynamic>> _personalRecords = [];     // Personal fitness records
+  List<Map<String, dynamic>> _weeklyProgressData = [];  // Weekly progress data
 
   // -------------------- UI CONSTANTS --------------------
   static const double _coverHeight = 220.0;
@@ -236,6 +240,12 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             'steps': 0,
             'caloriesBurned': 0,
             'workouts': 0,
+            'currentWeight': data['currentWeight'] ?? 70,
+            'targetWeight': data['targetWeight'] ?? 65,
+            'bodyFat': data['bodyFat'] ?? 18,
+            'targetBodyFat': data['targetBodyFat'] ?? 15,
+            'currentStreak': data['currentStreak'] ?? 0,
+            'longestStreak': data['longestStreak'] ?? 0,
           };
         }
 
@@ -436,8 +446,30 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Future<void> _openMessage() async {
-    if (_isOwnProfile) return;
-    Fluttertoast.showToast(msg: 'Open chat (not implemented yet)');
+    if (_isOwnProfile || _currentUser == null) return;
+    
+    try {
+      final chatService = ChatService();
+      final chatId = await chatService.getOrCreateChatId(
+        _currentUser!.uid,
+        widget.profileUserId,
+      );
+      
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (ctx) => ChatScreen(
+            chatId: chatId,
+            currentUserId: _currentUser!.uid,
+            otherUserId: widget.profileUserId,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error opening chat: $e');
+      Fluttertoast.showToast(msg: 'Failed to open chat. Please try again.');
+    }
   }
 
   // ===================================================================
@@ -823,18 +855,27 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Suggested Gurus (Coaches)',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+              Expanded(
+                child: Text(
+                  'Suggested Gurus (Coaches)',
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (_primaryCategory != null && _primaryCategory!.isNotEmpty)
-                Text(
-                  _primaryCategory!,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
+                Flexible(
+                  child: Text(
+                    _primaryCategory!,
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
                   ),
                 ),
             ],
@@ -1184,18 +1225,27 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Achievements & Badges',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+              Expanded(
+                child: Text(
+                  'Achievements & Badges',
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (_isOwnProfile)
-                Text(
-                  'Auto-unlocks as you use Halo',
-                  style: GoogleFonts.poppins(
-                    fontSize: 10,
+                Flexible(
+                  child: Text(
+                    'Auto-unlocks as you use Halo',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
                   ),
                 ),
             ],
@@ -1510,9 +1560,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 if (_socialLinks['instagram'] != null)
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: () {
-                        // TODO: open Instagram link using url_launcher
-                      },
+                      onPressed: () => _openSocialLink('instagram', _socialLinks['instagram']!),
                       child: const Text('Instagram'),
                     ),
                   ),
@@ -1521,9 +1569,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 if (_socialLinks['spotify'] != null)
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: () {
-                        // TODO: open Spotify link
-                      },
+                      onPressed: () => _openSocialLink('spotify', _socialLinks['spotify']!),
                       child: const Text('Spotify'),
                     ),
                   ),
@@ -1532,9 +1578,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 if (_socialLinks['telegram'] != null)
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: () {
-                        // TODO: open Telegram link
-                      },
+                      onPressed: () => _openSocialLink('telegram', _socialLinks['telegram']!),
                       child: const Text('Telegram'),
                     ),
                   ),
@@ -1608,9 +1652,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 ),
               ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                // TODO: open article link if available
-              },
+              onTap: () => _openArticle(a),
             );
           }).toList(),
         ],
@@ -1712,6 +1754,851 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ],
         ),
       ),
+    );
+  }
+
+  // ===================================================================
+  //  NEW PROFESSIONAL FEATURES FOR ASPIRANTS
+  // ===================================================================
+
+  Widget _buildProgressTrackingSection() {
+    if (!_isOwnProfile) return const SizedBox.shrink();
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            )
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: _lavender.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(Icons.trending_up, color: _lavender, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: Text(
+                          'Progress Tracking',
+                          style: GoogleFonts.poppins(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => _navigateToFullProgressPage(),
+                  child: Text(
+                    'View',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: _lavender,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: _isOwnProfile ? () => _editProgress('weight') : null,
+                    child: _buildProgressCard(
+                      'Weight',
+                      '${(_fitnessStats['currentWeight'] ?? 70).toString()} kg',
+                      'Goal: ${(_fitnessStats['targetWeight'] ?? 65).toString()} kg',
+                      Icons.monitor_weight,
+                      Colors.blue,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: _isOwnProfile ? () => _editProgress('bodyFat') : null,
+                    child: _buildProgressCard(
+                      'Body Fat',
+                      '${(_fitnessStats['bodyFat'] ?? 18).toString()}%',
+                      'Target: ${(_fitnessStats['targetBodyFat'] ?? 15).toString()}%',
+                      Icons.analytics,
+                      Colors.orange,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_fitnessGoals.isNotEmpty)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Active Goals',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ..._fitnessGoals.take(3).map((goal) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle_outline, size: 18, color: _lavender),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            goal,
+                            style: GoogleFonts.poppins(fontSize: 13),
+                          ),
+                        ),
+                        if (_isOwnProfile)
+                          IconButton(
+                            icon: Icon(Icons.edit, size: 16, color: Colors.grey[600]),
+                            onPressed: () => _editGoal(goal),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                      ],
+                    ),
+                  )),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProgressCard(String title, String value, String subtitle, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  title,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Colors.grey[700],
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: GoogleFonts.poppins(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              color: Colors.grey[600],
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkoutCalendarSection() {
+    if (!_isOwnProfile) return const SizedBox.shrink();
+    
+    final now = DateTime.now();
+    final currentMonth = now.month;
+    final currentYear = now.year;
+    final daysInMonth = DateTime(currentYear, currentMonth + 1, 0).day;
+    final workoutDays = List.generate(7, (i) => (i * 4) + 1); // Mock workout days
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            )
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: _lavender.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(Icons.calendar_today, color: _lavender, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: Text(
+                          'Workout Calendar',
+                          style: GoogleFonts.poppins(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Flexible(
+                  child: Text(
+                    '${_getMonthName(currentMonth)} $currentYear',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day) => 
+                Text(
+                  day,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ).toList(),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: List.generate(daysInMonth, (index) {
+                final day = index + 1;
+                final isWorkoutDay = workoutDays.contains(day);
+                final isToday = day == now.day;
+                
+                return Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: isToday 
+                        ? _lavender 
+                        : isWorkoutDay 
+                            ? _lavender.withOpacity(0.2)
+                            : Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                    border: isToday 
+                        ? Border.all(color: _lavender, width: 2)
+                        : null,
+                  ),
+                  child: Center(
+                    child: Text(
+                      day.toString(),
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                        color: isToday 
+                            ? Colors.white 
+                            : isWorkoutDay 
+                                ? _lavender 
+                                : Colors.grey[600],
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                _buildLegendItem(_lavender, 'Workout'),
+                const SizedBox(width: 16),
+                _buildLegendItem(_lavender.withOpacity(0.3), 'Today'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLegendItem(Color color, String label) {
+    return Row(
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[700]),
+        ),
+      ],
+    );
+  }
+
+  String _getMonthName(int month) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months[month - 1];
+  }
+
+  Widget _buildFitnessGoalsSection() {
+    if (!_isOwnProfile) return const SizedBox.shrink();
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_lavender.withOpacity(0.1), _deepLavender.withOpacity(0.05)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _lavender.withOpacity(0.3)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _lavender,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.flag, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Fitness Goals',
+                      style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              if (_isOwnProfile)
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  onPressed: _addNewGoal,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (_fitnessGoals.isEmpty)
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.flag_outlined, size: 48, color: Colors.grey[400]),
+                    const SizedBox(height: 8),
+                    Text(
+                      'No goals set yet',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton.icon(
+                      onPressed: _addNewGoal,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Set Your First Goal'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _lavender,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ..._fitnessGoals.map((goal) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: _lavender.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(Icons.fitness_center, color: _lavender, size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              goal,
+                              style: GoogleFonts.poppins(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 4),
+                            LinearProgressIndicator(
+                              value: 0.6, // Mock progress
+                              backgroundColor: Colors.grey[200],
+                              valueColor: AlwaysStoppedAnimation<Color>(_lavender),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (_isOwnProfile)
+                        PopupMenuButton<String>(
+                          icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
+                          onSelected: (value) {
+                            if (value == 'edit') {
+                              _editGoal(goal);
+                            } else if (value == 'delete') {
+                              _deleteGoal(goal);
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            PopupMenuItem(value: 'edit', child: Text('Edit')),
+                            PopupMenuItem(value: 'delete', child: Text('Delete')),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWorkoutStreakSection() {
+    final currentStreak = _fitnessStats['currentStreak'] ?? 5;
+    final longestStreak = _fitnessStats['longestStreak'] ?? 12;
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Colors.orange[100]!, Colors.orange[50]!],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.orange.withOpacity(0.2),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            )
+          ],
+        ),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.local_fire_department, color: Colors.orange[700], size: 32),
+                const SizedBox(width: 12),
+                Text(
+                  '$currentStreak',
+                  style: GoogleFonts.poppins(
+                    fontSize: 36,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange[900],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Day Streak!',
+                  style: GoogleFonts.poppins(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.orange[900],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Keep it up! Your longest streak is $longestStreak days',
+              style: GoogleFonts.poppins(
+                fontSize: 13,
+                color: Colors.orange[800],
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPersonalRecordsSection() {
+    // Use Firebase data if available, otherwise use defaults
+    final defaultRecords = [
+      {'name': 'Fastest 5K', 'value': '28:45', 'icon': Icons.directions_run, 'color': Colors.blue},
+      {'name': 'Max Bench Press', 'value': '85 kg', 'icon': Icons.fitness_center, 'color': Colors.red},
+      {'name': 'Longest Plank', 'value': '3:15', 'icon': Icons.timer, 'color': Colors.green},
+    ];
+    
+    final records = _personalRecords.isNotEmpty ? _personalRecords : defaultRecords;
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _lavender.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.emoji_events, color: _lavender, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Personal Records',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 130,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: records.length,
+              itemBuilder: (context, index) {
+                final record = records[index];
+                return GestureDetector(
+                  onTap: _isOwnProfile ? () => _editPersonalRecord(index, record) : null,
+                  child: Container(
+                    width: 140,
+                    margin: const EdgeInsets.only(right: 12),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.06),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        )
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Icon(
+                              record['icon'] is IconData 
+                                  ? record['icon'] as IconData
+                                  : _getIconFromString(record['icon']?.toString() ?? 'fitness_center'),
+                              color: record['color'] is Color
+                                  ? record['color'] as Color
+                                  : _getColorFromString(record['color']?.toString() ?? 'blue'),
+                              size: 24,
+                            ),
+                            if (_isOwnProfile)
+                              Icon(Icons.edit, size: 14, color: Colors.grey[400]),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Flexible(
+                          child: Text(
+                            record['name']?.toString() ?? 'Record',
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              color: Colors.grey[600],
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          record['value']?.toString() ?? '0',
+                          style: GoogleFonts.poppins(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: record['color'] is Color
+                                ? record['color'] as Color
+                                : _getColorFromString(record['color']?.toString() ?? 'blue'),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWeeklyProgressSection() {
+    if (!_isOwnProfile) return const SizedBox.shrink();
+    
+    // Use Firebase data if available, otherwise use defaults
+    final weeklyData = _weeklyProgressData.isNotEmpty
+        ? _weeklyProgressData
+        : [
+            {'day': 'Mon', 'workouts': 2, 'calories': 450},
+            {'day': 'Tue', 'workouts': 1, 'calories': 320},
+            {'day': 'Wed', 'workouts': 3, 'calories': 680},
+            {'day': 'Thu', 'workouts': 2, 'calories': 520},
+            {'day': 'Fri', 'workouts': 1, 'calories': 380},
+            {'day': 'Sat', 'workouts': 2, 'calories': 490},
+            {'day': 'Sun', 'workouts': 0, 'calories': 0},
+          ];
+    
+    final maxCalories = weeklyData.isNotEmpty
+        ? weeklyData.map((d) => (d['calories'] as num?)?.toInt() ?? 0).reduce((a, b) => a > b ? a : b)
+        : 680;
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            )
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: _lavender.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(Icons.bar_chart, color: _lavender, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Weekly Progress',
+                          style: GoogleFonts.poppins(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Flexible(
+                  child: Text(
+                    'This Week',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: Colors.grey[600],
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: weeklyData.map((data) {
+                final calories = (data['calories'] as num?)?.toInt() ?? 0;
+                final height = maxCalories > 0 
+                    ? (calories / maxCalories * 100).clamp(0.0, 100.0)
+                    : 0.0;
+                return Column(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: height,
+                      decoration: BoxDecoration(
+                        color: calories > 0 
+                            ? _lavender 
+                            : Colors.grey[300],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      data['day']?.toString() ?? '',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$calories',
+                      style: GoogleFonts.poppins(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildWeeklyStat('Total Workouts', '${weeklyData.map((d) => (d['workouts'] as num?)?.toInt() ?? 0).reduce((a, b) => a + b)}'),
+                Container(width: 1, height: 30, color: Colors.grey[300]),
+                _buildWeeklyStat('Calories Burned', '${weeklyData.map((d) => (d['calories'] as num?)?.toInt() ?? 0).reduce((a, b) => a + b)}'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWeeklyStat(String label, String value) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: GoogleFonts.poppins(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: _lavender,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            color: Colors.grey[600],
+          ),
+        ),
+      ],
     );
   }
 
@@ -1963,13 +2850,17 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                               children: [
                                 Row(
                                   children: [
-                                    Text(
-                                      _fullName.isNotEmpty
-                                          ? _fullName
-                                          : 'No name',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.bold,
+                                    Expanded(
+                                      child: Text(
+                                        _fullName.isNotEmpty
+                                            ? _fullName
+                                            : 'No name',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
                                     const SizedBox(width: 8),
@@ -2131,6 +3022,14 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   _buildHobbiesSection(),
                   _buildFitnessArticlesSection(),
                   _buildFitnessStatsSection(),
+                  
+                  // New Professional Features for Aspirants
+                  _buildProgressTrackingSection(),
+                  _buildWorkoutCalendarSection(),
+                  _buildFitnessGoalsSection(),
+                  _buildWorkoutStreakSection(),
+                  _buildPersonalRecordsSection(),
+                  _buildWeeklyProgressSection(),
 
                   const SizedBox(height: 80),
                 ],
@@ -2138,6 +3037,767 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // ===================================================================
+  //  EDIT FUNCTIONS FOR NEW FEATURES
+  // ===================================================================
+
+  Future<void> _editProgress(String type) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final currentWeightCtrl = TextEditingController(
+      text: (_fitnessStats['currentWeight'] ?? 70).toString(),
+    );
+    final targetWeightCtrl = TextEditingController(
+      text: (_fitnessStats['targetWeight'] ?? 65).toString(),
+    );
+    final bodyFatCtrl = TextEditingController(
+      text: (_fitnessStats['bodyFat'] ?? 18).toString(),
+    );
+    final targetBodyFatCtrl = TextEditingController(
+      text: (_fitnessStats['targetBodyFat'] ?? 15).toString(),
+    );
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Edit Progress',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: currentWeightCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Current Weight (kg)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.monitor_weight, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: targetWeightCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Target Weight (kg)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.flag, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: bodyFatCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Current Body Fat (%)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.analytics, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: targetBodyFatCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Target Body Fat (%)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.track_changes, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              try {
+                final updatedStats = {
+                  ..._fitnessStats,
+                  'currentWeight': double.tryParse(currentWeightCtrl.text) ?? _fitnessStats['currentWeight'] ?? 70,
+                  'targetWeight': double.tryParse(targetWeightCtrl.text) ?? _fitnessStats['targetWeight'] ?? 65,
+                  'bodyFat': double.tryParse(bodyFatCtrl.text) ?? _fitnessStats['bodyFat'] ?? 18,
+                  'targetBodyFat': double.tryParse(targetBodyFatCtrl.text) ?? _fitnessStats['targetBodyFat'] ?? 15,
+                };
+                
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'fitnessStats': updatedStats});
+                
+                setState(() => _fitnessStats = updatedStats);
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Progress updated successfully!');
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error updating progress: $e');
+              }
+            },
+            child: Text(
+              'Save',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _addNewGoal() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final goalCtrl = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Add Fitness Goal',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: TextField(
+          controller: goalCtrl,
+          decoration: InputDecoration(
+            labelText: 'Goal Description',
+            labelStyle: GoogleFonts.poppins(),
+            hintText: 'e.g., Lose 10kg, Run a marathon',
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            prefixIcon: Icon(Icons.flag, color: _lavender),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: _lavender, width: 2),
+            ),
+          ),
+          maxLines: 2,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (goalCtrl.text.trim().isEmpty) return;
+              
+              try {
+                final updatedGoals = List<String>.from(_fitnessGoals)..add(goalCtrl.text.trim());
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'fitnessGoals': updatedGoals});
+                
+                setState(() => _fitnessGoals = updatedGoals);
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Goal added successfully!');
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error adding goal: $e');
+              }
+            },
+            child: Text(
+              'Add',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editGoal(String oldGoal) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final goalCtrl = TextEditingController(text: oldGoal);
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Edit Goal',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: TextField(
+          controller: goalCtrl,
+          decoration: InputDecoration(
+            labelText: 'Goal Description',
+            labelStyle: GoogleFonts.poppins(),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            prefixIcon: Icon(Icons.flag, color: _lavender),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: _lavender, width: 2),
+            ),
+          ),
+          maxLines: 2,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (goalCtrl.text.trim().isEmpty) return;
+              
+              try {
+                final updatedGoals = List<String>.from(_fitnessGoals);
+                final index = updatedGoals.indexOf(oldGoal);
+                if (index != -1) {
+                  updatedGoals[index] = goalCtrl.text.trim();
+                  await _firestore
+                      .collection('users')
+                      .doc(_currentUser!.uid)
+                      .update({'fitnessGoals': updatedGoals});
+                  
+                  setState(() => _fitnessGoals = updatedGoals);
+                  Navigator.pop(ctx);
+                  Fluttertoast.showToast(msg: 'Goal updated successfully!');
+                }
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error updating goal: $e');
+              }
+            },
+            child: Text(
+              'Save',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteGoal(String goal) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Delete Goal',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to delete "$goal"?',
+          style: GoogleFonts.poppins(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red[600],
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              'Delete',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final updatedGoals = List<String>.from(_fitnessGoals)..remove(goal);
+        await _firestore
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .update({'fitnessGoals': updatedGoals});
+        
+        setState(() => _fitnessGoals = updatedGoals);
+        Fluttertoast.showToast(msg: 'Goal deleted successfully!');
+      } catch (e) {
+        Fluttertoast.showToast(msg: 'Error deleting goal: $e');
+      }
+    }
+  }
+
+  // ===================================================================
+  //  HELPER FUNCTIONS FOR STATIC FEATURES
+  // ===================================================================
+  
+  Future<void> _openSocialLink(String platform, String link) async {
+    try {
+      String url = link;
+      
+      // If link doesn't start with http, add it
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        // Format URLs based on platform
+        switch (platform.toLowerCase()) {
+          case 'instagram':
+            url = url.startsWith('@') 
+                ? 'https://instagram.com/${url.substring(1)}'
+                : 'https://instagram.com/$url';
+            break;
+          case 'spotify':
+            url = 'https://open.spotify.com/user/$url';
+            break;
+          case 'telegram':
+            url = url.startsWith('@')
+                ? 'https://t.me/${url.substring(1)}'
+                : 'https://t.me/$url';
+            break;
+          default:
+            url = 'https://$url';
+        }
+      }
+      
+      final uri = Uri.parse(url);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        Fluttertoast.showToast(msg: 'Could not open $platform link');
+      }
+    } catch (e) {
+      debugPrint('Error opening social link: $e');
+      Fluttertoast.showToast(msg: 'Failed to open link');
+    }
+  }
+  
+  Future<void> _openArticle(Map<String, dynamic> article) async {
+    try {
+      final url = article['url']?.toString() ?? article['link']?.toString();
+      if (url == null || url.isEmpty) {
+        Fluttertoast.showToast(msg: 'Article link not available');
+        return;
+      }
+      
+      String articleUrl = url;
+      if (!articleUrl.startsWith('http://') && !articleUrl.startsWith('https://')) {
+        articleUrl = 'https://$articleUrl';
+      }
+      
+      final uri = Uri.parse(articleUrl);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        Fluttertoast.showToast(msg: 'Could not open article');
+      }
+    } catch (e) {
+      debugPrint('Error opening article: $e');
+      Fluttertoast.showToast(msg: 'Failed to open article');
+    }
+  }
+  
+  Future<void> _navigateToFullProgressPage() async {
+    if (!_isOwnProfile) return;
+    
+    // Show a detailed progress page with charts and history
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _FullProgressPage(
+        fitnessStats: _fitnessStats,
+        fitnessGoals: _fitnessGoals,
+        onUpdate: () async {
+          await _loadProfileData();
+        },
+      ),
+    );
+  }
+
+  Future<void> _editPersonalRecord(int index, Map<String, dynamic> record) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final nameCtrl = TextEditingController(text: record['name'] as String);
+    final valueCtrl = TextEditingController(text: record['value'] as String);
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Edit Personal Record',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: InputDecoration(
+                labelText: 'Record Name',
+                labelStyle: GoogleFonts.poppins(),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                prefixIcon: Icon(record['icon'] as IconData, color: record['color'] as Color),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: _lavender, width: 2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: valueCtrl,
+              decoration: InputDecoration(
+                labelText: 'Record Value',
+                labelStyle: GoogleFonts.poppins(),
+                hintText: 'e.g., 28:45, 85 kg, 3:15',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                prefixIcon: Icon(Icons.edit, color: _lavender),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: _lavender, width: 2),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (nameCtrl.text.trim().isEmpty || valueCtrl.text.trim().isEmpty) return;
+              
+              try {
+                // Update in main user document
+                final updatedRecords = List<Map<String, dynamic>>.from(_personalRecords);
+                if (index < updatedRecords.length) {
+                  updatedRecords[index] = {
+                    'name': nameCtrl.text.trim(),
+                    'value': valueCtrl.text.trim(),
+                    'icon': record['icon']?.toString() ?? 'fitness_center',
+                    'color': record['color']?.toString() ?? 'blue',
+                  };
+                } else {
+                  updatedRecords.add({
+                    'name': nameCtrl.text.trim(),
+                    'value': valueCtrl.text.trim(),
+                    'icon': record['icon']?.toString() ?? 'fitness_center',
+                    'color': record['color']?.toString() ?? 'blue',
+                  });
+                }
+                
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({
+                      'personalRecords': updatedRecords,
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+                
+                setState(() => _personalRecords = updatedRecords);
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Record updated successfully!');
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error updating record: $e');
+              }
+            },
+            child: Text(
+              'Save',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  // Helper functions for Personal Records
+  IconData _getIconFromString(String iconStr) {
+    switch (iconStr.toLowerCase()) {
+      case 'directions_run':
+      case 'directionsrun':
+        return Icons.directions_run;
+      case 'fitness_center':
+      case 'fitnesscenter':
+        return Icons.fitness_center;
+      case 'timer':
+        return Icons.timer;
+      default:
+        return Icons.fitness_center;
+    }
+  }
+  
+  Color _getColorFromString(String colorStr) {
+    switch (colorStr.toLowerCase()) {
+      case 'blue':
+        return Colors.blue;
+      case 'red':
+        return Colors.red;
+      case 'green':
+        return Colors.green;
+      case 'orange':
+        return Colors.orange;
+      default:
+        return Colors.blue;
+    }
+  }
+}
+
+// ===================================================================
+//  FULL PROGRESS PAGE (Modal Bottom Sheet)
+// ===================================================================
+
+class _FullProgressPage extends StatelessWidget {
+  final Map<String, dynamic> fitnessStats;
+  final List<String> fitnessGoals;
+  final VoidCallback onUpdate;
+  
+  const _FullProgressPage({
+    required this.fitnessStats,
+    required this.fitnessGoals,
+    required this.onUpdate,
+  });
+  
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          // Handle bar
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          // Header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Full Progress',
+                  style: GoogleFonts.poppins(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          // Content
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Weight Progress
+                  _buildProgressCard(
+                    'Weight Progress',
+                    'Current: ${fitnessStats['currentWeight'] ?? 70} kg',
+                    'Target: ${fitnessStats['targetWeight'] ?? 65} kg',
+                    Icons.monitor_weight,
+                    Colors.blue,
+                  ),
+                  const SizedBox(height: 16),
+                  // Body Fat Progress
+                  _buildProgressCard(
+                    'Body Fat Progress',
+                    'Current: ${fitnessStats['bodyFat'] ?? 18}%',
+                    'Target: ${fitnessStats['targetBodyFat'] ?? 15}%',
+                    Icons.analytics,
+                    Colors.orange,
+                  ),
+                  const SizedBox(height: 24),
+                  // Goals Section
+                  if (fitnessGoals.isNotEmpty) ...[
+                    Text(
+                      'Active Goals',
+                      style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    ...fitnessGoals.map((goal) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Icon(Icons.check_circle_outline, color: const Color(0xFFA58CE3), size: 20),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              goal,
+                              style: GoogleFonts.poppins(fontSize: 14),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildProgressCard(String title, String current, String target, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: color, size: 24),
+              const SizedBox(width: 12),
+              Text(
+                title,
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            current,
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              color: Colors.grey[700],
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            target,
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }

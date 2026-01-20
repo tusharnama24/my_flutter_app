@@ -2,47 +2,57 @@ plugins {
     id "com.android.application"
     id "kotlin-android"
     id "dev.flutter.flutter-gradle-plugin"
-    id 'com.google.gms.google-services'
+    id "com.google.gms.google-services"
 }
 
-// ----> Place this block here, at the top level, outside android {}
-repositories {
-    flatDir {
-        dirs '../libs'
-    }
+import java.util.Properties
+import java.io.FileInputStream
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
 android {
-    namespace = "com.example.classic_1"
-    compileSdkVersion 35
-    ndkVersion = "25.1.8937393"
+    namespace "in.urss.halo"
+    compileSdk 36
+    ndkVersion "27.0.12077973"
 
     defaultConfig {
-        applicationId = "com.example.classic_1"
-        minSdkVersion flutter.minSdkVersion
-        targetSdkVersion 33
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
-        manifestPlaceholders = [
-                redirectSchemeName: "yourapp",
-                redirectHostName: "callback"
-        ]
+        applicationId "in.urss.halo"
+        minSdk flutter.minSdkVersion
+        targetSdk 35
+        versionCode flutter.versionCode
+        versionName flutter.versionName
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = '17'
+        jvmTarget = "17"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file(keystoreProperties['storeFile'])
+            storePassword keystoreProperties['storePassword']
+            keyAlias keystoreProperties['keyAlias']
+            keyPassword keystoreProperties['keyPassword']
+        }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.debug
-            minifyEnabled false
-            shrinkResources false
+            signingConfig signingConfigs.release
+            minifyEnabled true
+            shrinkResources true
+        }
+        debug {
+            signingConfig signingConfigs.debug
         }
     }
 }
@@ -50,19 +60,16 @@ android {
 dependencies {
     implementation platform('com.google.firebase:firebase-bom:33.14.0')
     implementation 'com.google.firebase:firebase-analytics'
+
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.9.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.1'
+
     implementation 'com.google.android.gms:play-services-auth:20.7.0'
-    implementation(name: 'spotify-app-remote-release', ext: 'aar')
-    implementation(name: 'spotify-auth-release-2.1.0', ext: 'aar')
-    // implementation(name: 'spotify-auth-store-release-2.1.0', ext: 'aar')
 }
 
 flutter {
-    source = "../.."
+    source "../.."
 }
-
-apply plugin: 'com.google.gms.google-services'

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:classic_1/Bottom%20Pages/HomePage.dart';
+import 'package:halo/Bottom%20Pages/HomePage.dart';
 
 // User model class
 class User {

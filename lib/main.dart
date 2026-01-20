@@ -1,7 +1,7 @@
-import 'package:classic_1/Bottom Pages/HomePage.dart';
-import 'package:classic_1/Category/categorypage.dart';
-import 'package:classic_1/forgotpasswordpage.dart';
-import 'package:classic_1/logoscreen.dart';
+import 'package:halo/Bottom Pages/HomePage.dart';
+import 'package:halo/Category/categorypage.dart';
+import 'package:halo/forgotpasswordpage.dart';
+import 'package:halo/logoscreen.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -9,8 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/cupertino.dart';
 import 'firebase_options.dart';
-import 'package:classic_1/widgets/google_sign_in_button.dart';
-import 'package:classic_1/chat/chat_list_page.dart';
+import 'package:halo/widgets/google_sign_in_button.dart';
+import 'package:halo/chat/chat_list_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'interest_selection_page.dart';
 

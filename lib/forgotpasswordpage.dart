@@ -1,4 +1,4 @@
-import 'package:classic_1/main.dart';
+import 'package:halo/main.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -43,7 +43,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
         color: Colors.grey.shade300,
         fontWeight: FontWeight.w500,
       ),
-      hintText: 'you@example.com',
+      hintText: 'you@urss.in',
       hintStyle: textTheme.bodySmall?.copyWith(
         color: Colors.grey.shade500,
       ),

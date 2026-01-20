@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:classic_1/main.dart';
+import 'package:halo/main.dart';
 
 void main() {
   testWidgets('App loads main screen correctly', (WidgetTester tester) async {

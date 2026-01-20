@@ -5,7 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'chat_service.dart';
 import 'chat_screen.dart';
 import 'user_list_page.dart';
-import 'package:classic_1/Bottom%20Pages/HomePage.dart';
+import 'package:halo/Bottom%20Pages/HomePage.dart';
 
 // THEME COLORS (reuse Halo theme where possible)
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender

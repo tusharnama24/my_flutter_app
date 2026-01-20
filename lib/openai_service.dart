@@ -5,7 +5,7 @@ class OpenAIService {
   final String apiKey = 'YOUR_OPENAI_API_KEY'; // Replace with your OpenAI API key here
 
   Future<String> generateCaption(String prompt) async {
-    final url = Uri.parse('https://api.openai.com/v1/chat/completions');
+    final url = Uri.parse('https://api.openai.in/v1/chat/completions');
     final headers = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $apiKey',
@@ -32,7 +32,7 @@ class OpenAIService {
   }
 
   Future<String> generateHashtagsAndEmojis(String prompt) async {
-    final url = Uri.parse('https://api.openai.com/v1/chat/completions');
+    final url = Uri.parse('https://api.openai.in/v1/chat/completions');
     final headers = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $apiKey',
@@ -62,7 +62,7 @@ class OpenAIService {
   }
 
   Future<String> chatFitnessCoach(String userQuestion) async {
-    final url = Uri.parse('https://api.openai.com/v1/chat/completions');
+    final url = Uri.parse('https://api.openai.in/v1/chat/completions');
     final headers = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $apiKey',

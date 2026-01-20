@@ -1,11 +1,11 @@
-import 'package:classic_1/main.dart';
+import 'package:halo/main.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:open_file/open_file.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -160,7 +160,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
   }
 
   Future<void> _openFile(String filePath) async {
-    await OpenFile.open(filePath);
+    await OpenFilex.open(filePath);
   }
 
   void _showFileSourceDialog() {

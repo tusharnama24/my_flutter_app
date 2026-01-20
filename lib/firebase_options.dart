@@ -45,7 +45,7 @@ class DefaultFirebaseOptions {
     appId: '1:61069233213:web:a6a94a34d3fc85524fee54',
     messagingSenderId: '61069233213',
     projectId: 'halo-fb212',
-    authDomain: 'halo-fb212.firebaseapp.com',
+    authDomain: 'halo-fb212.firebaseapp.in',
     storageBucket: 'halo-fb212.firebasestorage.app',
     measurementId: 'G-2T3ZCM3BF1',
   );
@@ -64,7 +64,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '61069233213',
     projectId: 'halo-fb212',
     storageBucket: 'halo-fb212.firebasestorage.app',
-    iosBundleId: 'com.example.classic1',
+    iosBundleId: 'in.urss.classic1',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
@@ -73,7 +73,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '61069233213',
     projectId: 'halo-fb212',
     storageBucket: 'halo-fb212.firebasestorage.app',
-    iosBundleId: 'com.example.classic1',
+    iosBundleId: 'in.urss.classic1',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
@@ -81,7 +81,7 @@ class DefaultFirebaseOptions {
     appId: '1:61069233213:web:0f2cab072b2242134fee54',
     messagingSenderId: '61069233213',
     projectId: 'halo-fb212',
-    authDomain: 'halo-fb212.firebaseapp.com',
+    authDomain: 'halo-fb212.firebaseapp.in',
     storageBucket: 'halo-fb212.firebasestorage.app',
     measurementId: 'G-3HVJM7EHRP',
   );

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:classic_1/main.dart'; // for LoginPage
+import 'package:halo/main.dart'; // for LoginPage
 
 class LogoScreen extends StatefulWidget {
   const LogoScreen({super.key});

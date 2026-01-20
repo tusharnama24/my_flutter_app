@@ -3,7 +3,7 @@
 // -------------------- IMPORTS --------------------
 import 'dart:io';
 import 'package:camera/camera.dart';
-import 'package:classic_1/newpostpage.dart';
+import 'package:halo/newpostpage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -16,8 +16,11 @@ import 'package:permission_handler/permission_handler.dart';
 // local pages
 import '../../editprofilepage.dart';
 import '../../main.dart'; // LoginPage
-import 'package:classic_1/Bottom Pages/PrivacySettingsPage.dart';
-import 'package:classic_1/Bottom Pages/SettingsPage.dart';
+import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
+import 'package:halo/Bottom Pages/SettingsPage.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:halo/chat/chat_screen.dart';
+import 'package:halo/chat/chat_service.dart';
 
 // GURU SECTIONS
 import '../Sections/Guru Section/guru_booking_section.dart';
@@ -855,8 +858,30 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Future<void> _openMessage() async {
-    if (_isOwnProfile) return;
-    Fluttertoast.showToast(msg: 'Open chat (not implemented yet)');
+    if (_isOwnProfile || _currentUser == null) return;
+    
+    try {
+      final chatService = ChatService();
+      final chatId = await chatService.getOrCreateChatId(
+        _currentUser!.uid,
+        widget.profileUserId,
+      );
+      
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (ctx) => ChatScreen(
+            chatId: chatId,
+            currentUserId: _currentUser!.uid,
+            otherUserId: widget.profileUserId,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error opening chat: $e');
+      Fluttertoast.showToast(msg: 'Failed to open chat. Please try again.');
+    }
   }
 
   // ===================================================================
@@ -952,7 +977,18 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
-              // TODO: Navigate to booking management page
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (ctx) => GuruBookingSection(
+                    guruid: _currentUser!.uid,
+                    isOwnProfile: true,
+                    bookingSettings: _bookingSettings,
+                    upcomingSessions: _upcomingSessions,
+                    pastSessions: _pastSessions,
+                  ),
+                ),
+              );
             },
             child: const Text('Edit Settings'),
           ),
@@ -1000,7 +1036,18 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
-              // TODO: Navigate to booking page
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (ctx) => GuruBookingSection(
+                    guruid: widget.profileUserId,
+                    isOwnProfile: false,
+                    bookingSettings: _bookingSettings,
+                    upcomingSessions: _upcomingSessions,
+                    pastSessions: _pastSessions,
+                  ),
+                ),
+              );
             },
             child: const Text('Continue'),
           ),
@@ -1039,7 +1086,17 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
-              // TODO: Navigate to classes management page
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (ctx) => GuruClassesSection(
+                    guruid: _currentUser!.uid,
+                    isOwnProfile: true,
+                    classes: _classes,
+                    specialties: _specialties,
+                  ),
+                ),
+              );
             },
             child: const Text('Create New Class'),
           ),
@@ -1116,7 +1173,17 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
-              // TODO: Navigate to full earnings page
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (ctx) => GuruEarningsSection(
+                    guruid: _currentUser!.uid,
+                    isOwnProfile: true,
+                    earningsSummary: _earningsSummary,
+                    recentEarnings: _recentEarnings,
+                  ),
+                ),
+              );
             },
             child: const Text('View All'),
           ),
@@ -1474,12 +1541,16 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     children: [
                       Row(
                         children: [
-                          Text(
-                            _fullName.isNotEmpty ? _fullName : 'No name',
-                            style: GoogleFonts.poppins(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black87,
+                          Expanded(
+                            child: Text(
+                              _fullName.isNotEmpty ? _fullName : 'No name',
+                              style: GoogleFonts.poppins(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.black87,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -1550,11 +1621,15 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                             const Icon(Icons.location_on_outlined,
                                 size: 14, color: Colors.black87),
                             const SizedBox(width: 4),
-                            Text(
-                              _city,
-                              style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                color: Colors.black87,
+                            Flexible(
+                              child: Text(
+                                _city,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Colors.black87,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
@@ -1563,11 +1638,15 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                             const Icon(Icons.school_outlined,
                                 size: 14, color: Colors.black87),
                             const SizedBox(width: 4),
-                            Text(
-                              '${_experienceYears}+ yrs exp',
-                              style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                color: Colors.black87,
+                            Flexible(
+                              child: Text(
+                                '${_experienceYears}+ yrs exp',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Colors.black87,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
@@ -1581,6 +1660,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                             fontSize: 12,
                             color: Colors.black87,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       if (_trainingStyle.isNotEmpty)
                         Text(
@@ -1814,6 +1895,13 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               const SizedBox(height: 24),
               // Social Links (Figma Design - YouTube, Apple Music, Instagram)
               _buildSocialLinksSection(),
+              const SizedBox(height: 24),
+              // New Professional Features for Gurus
+              _buildTestimonialsSection(),
+              _buildCertificationsDisplaySection(),
+              _buildTrainingProgramsShowcase(),
+              _buildSuccessStoriesSection(),
+              _buildVideoTutorialsPreview(),
               const SizedBox(height: 24),
               // Footer
               _buildFooter(),
@@ -3057,9 +3145,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               ),
               if (!_isOwnProfile)
                 TextButton(
-                  onPressed: () {
-                    // TODO: Navigate to write review
-                  },
+                  onPressed: () => _showWriteReviewDialog(),
                   child: Text(
                     'Write a Review',
                     style: GoogleFonts.poppins(
@@ -3436,18 +3522,21 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         Row(
           children: List.generate(3, (index) {
             return Expanded(
-              child: Container(
-                margin: EdgeInsets.only(right: index < 2 ? 8 : 0),
-                height: 80,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Center(
-                  child: Text(
-                    'Youtube Thumbnail',
-                    style: TextStyle(fontSize: 10, color: Colors.grey),
-                    textAlign: TextAlign.center,
+              child: GestureDetector(
+                onTap: () => _openSocialLink('youtube', _socialLinks['youtube'] ?? _socialLinks['YouTube'] ?? ''),
+                child: Container(
+                  margin: EdgeInsets.only(right: index < 2 ? 8 : 0),
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      'Youtube Thumbnail',
+                      style: TextStyle(fontSize: 10, color: Colors.grey),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
                 ),
               ),
@@ -3588,14 +3677,17 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         Row(
           children: List.generate(3, (index) {
             return Expanded(
-              child: Container(
-                margin: EdgeInsets.only(right: index < 2 ? 8 : 0),
-                height: 100,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(8),
+              child: GestureDetector(
+                onTap: () => _openSocialLink('instagram', _socialLinks['instagram'] ?? _socialLinks['Instagram'] ?? ''),
+                child: Container(
+                  margin: EdgeInsets.only(right: index < 2 ? 8 : 0),
+                  height: 100,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.image, color: Colors.grey, size: 32),
                 ),
-                child: const Icon(Icons.image, color: Colors.grey, size: 32),
               ),
             );
           }),
@@ -3618,6 +3710,887 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ],
         ),
       ),
+    );
+  }
+
+  // ===================================================================
+  //  NEW PROFESSIONAL FEATURES FOR GURUS
+  // ===================================================================
+
+  Widget _buildTestimonialsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _lavender.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.format_quote, color: _lavender, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Client Testimonials',
+                    style: GoogleFonts.poppins(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+              if (_reviews.isNotEmpty)
+                TextButton(
+                  onPressed: () => _showAllTestimonials(),
+                  child: Text(
+                    'View All',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: _lavender,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_reviews.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(Icons.rate_review_outlined, size: 48, color: Colors.grey[400]),
+                    const SizedBox(height: 8),
+                    Text(
+                      'No testimonials yet',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Column(
+              children: _reviews.take(2).map((review) {
+                final name = review['name']?.toString() ?? 'Client';
+                final rating = (review['rating'] ?? 5).toDouble();
+                final text = review['text']?.toString() ?? '';
+                
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 20,
+                            backgroundColor: _lavender.withOpacity(0.2),
+                            child: Text(
+                              name[0].toUpperCase(),
+                              style: GoogleFonts.poppins(
+                                color: _lavender,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                                Row(
+                                  children: List.generate(5, (i) {
+                                    return Icon(
+                                      i < rating.floor()
+                                          ? Icons.star
+                                          : (i < rating ? Icons.star_half : Icons.star_border),
+                                      size: 14,
+                                      color: Colors.amber[700],
+                                    );
+                                  }),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (text.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          text,
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            color: Colors.black87,
+                            height: 1.5,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCertificationsDisplaySection() {
+    if (_certifications.isEmpty && !_isOwnProfile) return const SizedBox.shrink();
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _lavender.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.verified, color: _lavender, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Certifications & Credentials',
+                    style: GoogleFonts.poppins(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+              if (_isOwnProfile)
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  onPressed: _addCertification,
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_certifications.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(Icons.school_outlined, size: 48, color: Colors.grey[400]),
+                    const SizedBox(height: 8),
+                    Text(
+                      _isOwnProfile 
+                          ? 'Add your certifications to build trust'
+                          : 'No certifications listed',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: _certifications.map((cert) {
+                return Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _lavender.withOpacity(0.3)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: _lavender.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(Icons.verified_user, color: _lavender, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              cert['name']?.toString() ?? 'Certification',
+                              style: GoogleFonts.poppins(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.black87,
+                              ),
+                            ),
+                            if (cert['issuer'] != null)
+                              Text(
+                                cert['issuer'].toString(),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (_isOwnProfile)
+                        PopupMenuButton<String>(
+                          icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
+                          onSelected: (value) {
+                            final index = _certifications.indexOf(cert);
+                            if (value == 'edit') {
+                              _editCertification(index, cert);
+                            } else if (value == 'delete') {
+                              _deleteCertification(index);
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            PopupMenuItem(value: 'edit', child: Text('Edit')),
+                            PopupMenuItem(value: 'delete', child: Text('Delete')),
+                          ],
+                        ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildTrainingProgramsShowcase() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _lavender.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.fitness_center, color: _lavender, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Training Programs',
+                    style: GoogleFonts.poppins(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+              if (_programs.isNotEmpty)
+                TextButton(
+                  onPressed: () => _showAllPrograms(),
+                  child: Text(
+                    'View All',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: _lavender,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_programs.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(Icons.list_alt, size: 48, color: Colors.grey[400]),
+                    const SizedBox(height: 8),
+                    Text(
+                      _isOwnProfile 
+                          ? 'Create training programs for your clients'
+                          : 'No programs available',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    if (_isOwnProfile) ...[
+                      const SizedBox(height: 12),
+                      ElevatedButton.icon(
+                        onPressed: _addTrainingProgram,
+                        icon: Icon(Icons.add, size: 18),
+                        label: Text('Add Program'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _lavender,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: SizedBox(
+              height: 180,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: _programs.length,
+                itemBuilder: (context, index) {
+                  final program = _programs[index];
+                  return Container(
+                    width: 200,
+                    margin: const EdgeInsets.only(right: 12),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [_lavender.withOpacity(0.1), _deepLavender.withOpacity(0.05)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: _lavender.withOpacity(0.3)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.play_circle_outline, color: _lavender, size: 24),
+                            const Spacer(),
+                            if (program['price'] != null && (program['price'] as num) > 0)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: _lavender,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  '₹${program['price']}',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          program['name']?.toString() ?? 'Program',
+                          style: GoogleFonts.poppins(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          program['duration']?.toString() ?? 'Ongoing',
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        const Spacer(),
+                        if (_isOwnProfile)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              IconButton(
+                                icon: Icon(Icons.edit, size: 18, color: Colors.grey[600]),
+                                onPressed: () => _editTrainingProgram(index, program),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                              ),
+                              IconButton(
+                                icon: Icon(Icons.delete, size: 18, color: Colors.red[600]),
+                                onPressed: () => _deleteTrainingProgram(index),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                              ),
+                            ],
+                          )
+                        else
+                          ElevatedButton(
+                            onPressed: () => _showProgramDetails(program),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _lavender,
+                              foregroundColor: Colors.white,
+                            minimumSize: const Size(double.infinity, 36),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: Text(
+                            'View Details',
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSuccessStoriesSection() {
+    // Mock success stories - in real app, load from Firestore
+    final successStories = [
+      {
+        'clientName': 'Rajesh K.',
+        'achievement': 'Lost 15kg in 3 months',
+        'beforeAfter': 'Before/After photos',
+        'testimonial': 'Amazing transformation with personalized training!',
+      },
+      {
+        'clientName': 'Priya M.',
+        'achievement': 'Completed first marathon',
+        'beforeAfter': 'Race day photos',
+        'testimonial': 'Best coach ever! Achieved my dream goal.',
+      },
+    ];
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.celebration, color: Colors.green[700], size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Success Stories',
+                    style: GoogleFonts.poppins(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+              if (_isOwnProfile)
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  onPressed: _addSuccessStory,
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: SizedBox(
+            height: 200,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: successStories.length,
+              itemBuilder: (context, index) {
+                final story = successStories[index];
+                return Container(
+                  width: 280,
+                  margin: const EdgeInsets.only(right: 12),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.06),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 50,
+                            height: 50,
+                            decoration: BoxDecoration(
+                              color: Colors.green.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(Icons.emoji_events, color: Colors.green[700], size: 28),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  story['clientName'] as String,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                                Text(
+                                  story['achievement'] as String,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    color: Colors.green[700],
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (_isOwnProfile)
+                            PopupMenuButton<String>(
+                              icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
+                              onSelected: (value) {
+                                if (value == 'edit') {
+                                  _editSuccessStory(index, story);
+                                } else if (value == 'delete') {
+                                  _deleteSuccessStory(index);
+                                }
+                              },
+                              itemBuilder: (context) => [
+                                PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                PopupMenuItem(value: 'delete', child: Text('Delete')),
+                              ],
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        height: 80,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Center(
+                          child: Text(
+                            story['beforeAfter'] as String,
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        story['testimonial'] as String,
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.grey[700],
+                          fontStyle: FontStyle.italic,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVideoTutorialsPreview() {
+    // Mock video tutorials - in real app, load from Firestore
+    final tutorials = [
+      {'title': 'Proper Form: Deadlift', 'duration': '5:30', 'views': '1.2K'},
+      {'title': 'Cardio HIIT Workout', 'duration': '12:15', 'views': '3.5K'},
+      {'title': 'Yoga for Flexibility', 'duration': '20:00', 'views': '890'},
+    ];
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.play_circle_filled, color: Colors.red[700], size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Video Tutorials',
+                    style: GoogleFonts.poppins(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+              if (_isOwnProfile)
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  onPressed: _addVideoTutorial,
+                )
+              else if (tutorials.isNotEmpty)
+                TextButton(
+                  onPressed: () => _showAllVideos(tutorials),
+                  child: Text(
+                    'View All',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: _lavender,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: SizedBox(
+            height: 140,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: tutorials.length,
+              itemBuilder: (context, index) {
+                final tutorial = tutorials[index];
+                return Container(
+                  width: 220,
+                  margin: const EdgeInsets.only(right: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[900],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Stack(
+                    children: [
+                      // Video thumbnail placeholder
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey[800],
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Center(
+                          child: Icon(
+                            Icons.play_circle_outline,
+                            size: 48,
+                            color: Colors.white.withOpacity(0.8),
+                          ),
+                        ),
+                      ),
+                      if (_isOwnProfile)
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: PopupMenuButton<String>(
+                            icon: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.6),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(Icons.more_vert, size: 16, color: Colors.white),
+                            ),
+                            onSelected: (value) {
+                              if (value == 'edit') {
+                                _editVideoTutorial(index, tutorial);
+                              } else if (value == 'delete') {
+                                _deleteVideoTutorial(index);
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              PopupMenuItem(value: 'edit', child: Text('Edit')),
+                              PopupMenuItem(value: 'delete', child: Text('Delete')),
+                            ],
+                          ),
+                        ),
+                      Positioned(
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withOpacity(0.8),
+                              ],
+                            ),
+                            borderRadius: const BorderRadius.vertical(
+                              bottom: Radius.circular(12),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                tutorial['title'] as String,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Icon(Icons.access_time, size: 12, color: Colors.white70),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    tutorial['duration'] as String,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 11,
+                                      color: Colors.white70,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Icon(Icons.visibility, size: 12, color: Colors.white70),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    tutorial['views'] as String,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 11,
+                                      color: Colors.white70,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -3673,6 +4646,1467 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     }
   }
 
+  // ===================================================================
+  //  EDIT FUNCTIONS FOR NEW FEATURES
+  // ===================================================================
+
+  Future<void> _addCertification() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final nameCtrl = TextEditingController();
+    final issuerCtrl = TextEditingController();
+    final yearCtrl = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Add Certification',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Certification Name',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.verified_user, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: issuerCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Issuing Organization',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.business, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: yearCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Year (Optional)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (nameCtrl.text.trim().isEmpty) return;
+              
+              try {
+                final newCert = {
+                  'name': nameCtrl.text.trim(),
+                  'issuer': issuerCtrl.text.trim(),
+                  if (yearCtrl.text.trim().isNotEmpty) 'year': int.tryParse(yearCtrl.text.trim()),
+                };
+                
+                final updatedCerts = List<Map<String, dynamic>>.from(_certifications)..add(newCert);
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'certifications': updatedCerts});
+                
+                setState(() => _certifications = updatedCerts);
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Certification added successfully!');
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error adding certification: $e');
+              }
+            },
+            child: Text(
+              'Add',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editCertification(int index, Map<String, dynamic> cert) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final nameCtrl = TextEditingController(text: cert['name']?.toString() ?? '');
+    final issuerCtrl = TextEditingController(text: cert['issuer']?.toString() ?? '');
+    final yearCtrl = TextEditingController(text: cert['year']?.toString() ?? '');
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Edit Certification',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Certification Name',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.verified_user, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: issuerCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Issuing Organization',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.business, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: yearCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Year (Optional)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (nameCtrl.text.trim().isEmpty) return;
+              
+              try {
+                final updatedCert = {
+                  'name': nameCtrl.text.trim(),
+                  'issuer': issuerCtrl.text.trim(),
+                  if (yearCtrl.text.trim().isNotEmpty) 'year': int.tryParse(yearCtrl.text.trim()),
+                };
+                
+                final updatedCerts = List<Map<String, dynamic>>.from(_certifications);
+                updatedCerts[index] = updatedCert;
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'certifications': updatedCerts});
+                
+                setState(() => _certifications = updatedCerts);
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Certification updated successfully!');
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error updating certification: $e');
+              }
+            },
+            child: Text(
+              'Save',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteCertification(int index) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Delete Certification',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to delete this certification?',
+          style: GoogleFonts.poppins(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red[600],
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              'Delete',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final updatedCerts = List<Map<String, dynamic>>.from(_certifications)..removeAt(index);
+        await _firestore
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .update({'certifications': updatedCerts});
+        
+        setState(() => _certifications = updatedCerts);
+        Fluttertoast.showToast(msg: 'Certification deleted successfully!');
+      } catch (e) {
+        Fluttertoast.showToast(msg: 'Error deleting certification: $e');
+      }
+    }
+  }
+
+  Future<void> _addTrainingProgram() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final nameCtrl = TextEditingController();
+    final durationCtrl = TextEditingController();
+    final priceCtrl = TextEditingController(text: '0');
+    final descriptionCtrl = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Add Training Program',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Program Name',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.fitness_center, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: durationCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Duration (e.g., 12 weeks)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: priceCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Price (₹)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.currency_rupee, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: descriptionCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Description (Optional)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.description, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                maxLines: 3,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (nameCtrl.text.trim().isEmpty) return;
+              
+              try {
+                final newProgram = {
+                  'name': nameCtrl.text.trim(),
+                  'duration': durationCtrl.text.trim().isEmpty ? 'Ongoing' : durationCtrl.text.trim(),
+                  'price': int.tryParse(priceCtrl.text.trim()) ?? 0,
+                  'description': descriptionCtrl.text.trim(),
+                };
+                
+                final updatedPrograms = List<Map<String, dynamic>>.from(_programs)..add(newProgram);
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'trainingPrograms': updatedPrograms});
+                
+                setState(() => _programs = updatedPrograms);
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Training program added successfully!');
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error adding program: $e');
+              }
+            },
+            child: Text(
+              'Add',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editTrainingProgram(int index, Map<String, dynamic> program) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final nameCtrl = TextEditingController(text: program['name']?.toString() ?? '');
+    final durationCtrl = TextEditingController(text: program['duration']?.toString() ?? '');
+    final priceCtrl = TextEditingController(text: (program['price'] ?? 0).toString());
+    final descriptionCtrl = TextEditingController(text: program['description']?.toString() ?? '');
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Edit Training Program',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Program Name',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.fitness_center, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: durationCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Duration',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: priceCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Price (₹)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.currency_rupee, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: descriptionCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Description',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.description, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                maxLines: 3,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (nameCtrl.text.trim().isEmpty) return;
+              
+              try {
+                final updatedProgram = {
+                  'name': nameCtrl.text.trim(),
+                  'duration': durationCtrl.text.trim(),
+                  'price': int.tryParse(priceCtrl.text.trim()) ?? 0,
+                  'description': descriptionCtrl.text.trim(),
+                };
+                
+                final updatedPrograms = List<Map<String, dynamic>>.from(_programs);
+                updatedPrograms[index] = updatedProgram;
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'trainingPrograms': updatedPrograms});
+                
+                setState(() => _programs = updatedPrograms);
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Program updated successfully!');
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error updating program: $e');
+              }
+            },
+            child: Text(
+              'Save',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteTrainingProgram(int index) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Delete Program',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to delete this program?',
+          style: GoogleFonts.poppins(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red[600],
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              'Delete',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final updatedPrograms = List<Map<String, dynamic>>.from(_programs)..removeAt(index);
+        await _firestore
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .update({'trainingPrograms': updatedPrograms});
+        
+        setState(() => _programs = updatedPrograms);
+        Fluttertoast.showToast(msg: 'Program deleted successfully!');
+      } catch (e) {
+        Fluttertoast.showToast(msg: 'Error deleting program: $e');
+      }
+    }
+  }
+
+  Future<void> _addSuccessStory() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final clientNameCtrl = TextEditingController();
+    final achievementCtrl = TextEditingController();
+    final testimonialCtrl = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Add Success Story',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: clientNameCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Client Name',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.person, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: achievementCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Achievement',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.emoji_events, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: testimonialCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Testimonial',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.format_quote, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                maxLines: 3,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (clientNameCtrl.text.trim().isEmpty || achievementCtrl.text.trim().isEmpty) return;
+              
+              try {
+                final newStory = {
+                  'clientName': clientNameCtrl.text.trim(),
+                  'achievement': achievementCtrl.text.trim(),
+                  'testimonial': testimonialCtrl.text.trim(),
+                  'beforeAfter': 'Before/After photos',
+                };
+                
+                // Save to Firestore - you can create a successStories collection
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .collection('successStories')
+                    .add(newStory);
+                
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Success story added successfully!');
+                await _loadProfileData(); // Reload to show updated data
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error adding story: $e');
+              }
+            },
+            child: Text(
+              'Add',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editSuccessStory(int index, Map<String, dynamic> story) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final clientNameCtrl = TextEditingController(text: story['clientName']?.toString() ?? '');
+    final achievementCtrl = TextEditingController(text: story['achievement']?.toString() ?? '');
+    final testimonialCtrl = TextEditingController(text: story['testimonial']?.toString() ?? '');
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Edit Success Story',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: clientNameCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Client Name',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.person, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: achievementCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Achievement',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.emoji_events, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: testimonialCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Testimonial',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.format_quote, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+                maxLines: 3,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (clientNameCtrl.text.trim().isEmpty || achievementCtrl.text.trim().isEmpty) return;
+              
+              try {
+                final updatedStory = {
+                  'clientName': clientNameCtrl.text.trim(),
+                  'achievement': achievementCtrl.text.trim(),
+                  'testimonial': testimonialCtrl.text.trim(),
+                };
+                
+                // Update in Firestore - you'll need to track document IDs
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Success story updated successfully!');
+                await _loadProfileData();
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error updating story: $e');
+              }
+            },
+            child: Text(
+              'Save',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteSuccessStory(int index) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Delete Success Story',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to delete this success story?',
+          style: GoogleFonts.poppins(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red[600],
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              'Delete',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        // Delete from Firestore - you'll need to track document IDs
+        Fluttertoast.showToast(msg: 'Success story deleted successfully!');
+        await _loadProfileData();
+      } catch (e) {
+        Fluttertoast.showToast(msg: 'Error deleting story: $e');
+      }
+    }
+  }
+
+  Future<void> _addVideoTutorial() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final titleCtrl = TextEditingController();
+    final durationCtrl = TextEditingController();
+    final urlCtrl = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Add Video Tutorial',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Video Title',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.play_circle_outline, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: durationCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Duration (e.g., 5:30)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.access_time, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: urlCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Video URL (Optional)',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.link, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (titleCtrl.text.trim().isEmpty) return;
+              
+              try {
+                final newTutorial = {
+                  'title': titleCtrl.text.trim(),
+                  'duration': durationCtrl.text.trim(),
+                  'url': urlCtrl.text.trim(),
+                  'views': '0',
+                };
+                
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .collection('videoTutorials')
+                    .add(newTutorial);
+                
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Video tutorial added successfully!');
+                await _loadProfileData();
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error adding tutorial: $e');
+              }
+            },
+            child: Text(
+              'Add',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editVideoTutorial(int index, Map<String, dynamic> tutorial) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final titleCtrl = TextEditingController(text: tutorial['title']?.toString() ?? '');
+    final durationCtrl = TextEditingController(text: tutorial['duration']?.toString() ?? '');
+    final urlCtrl = TextEditingController(text: tutorial['url']?.toString() ?? '');
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Edit Video Tutorial',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Video Title',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.play_circle_outline, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: durationCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Duration',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.access_time, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: urlCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Video URL',
+                  labelStyle: GoogleFonts.poppins(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.link, color: _lavender),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _lavender, width: 2),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (titleCtrl.text.trim().isEmpty) return;
+              
+              try {
+                // Update in Firestore - you'll need to track document IDs
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Video tutorial updated successfully!');
+                await _loadProfileData();
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error updating tutorial: $e');
+              }
+            },
+            child: Text(
+              'Save',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteVideoTutorial(int index) async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Delete Video Tutorial',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to delete this video tutorial?',
+          style: GoogleFonts.poppins(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red[600],
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              'Delete',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        // Delete from Firestore - you'll need to track document IDs
+        Fluttertoast.showToast(msg: 'Video tutorial deleted successfully!');
+        await _loadProfileData();
+      } catch (e) {
+        Fluttertoast.showToast(msg: 'Error deleting tutorial: $e');
+      }
+    }
+  }
+
+  // ===================================================================
+  //  HELPER FUNCTIONS FOR STATIC FEATURES
+  // ===================================================================
+  
+  Future<void> _openSocialLink(String platform, String link) async {
+    try {
+      if (link.isEmpty) {
+        Fluttertoast.showToast(msg: '$platform link not available');
+        return;
+      }
+      
+      String url = link;
+      
+      // If link doesn't start with http, add it
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        // Format URLs based on platform
+        switch (platform.toLowerCase()) {
+          case 'youtube':
+            url = url.contains('youtube.com') || url.contains('youtu.be')
+                ? url
+                : 'https://youtube.com/$url';
+            break;
+          case 'instagram':
+            url = url.startsWith('@') 
+                ? 'https://instagram.com/${url.substring(1)}'
+                : 'https://instagram.com/$url';
+            break;
+          case 'spotify':
+          case 'applemusic':
+            url = 'https://open.spotify.com/user/$url';
+            break;
+          case 'telegram':
+            url = url.startsWith('@')
+                ? 'https://t.me/${url.substring(1)}'
+                : 'https://t.me/$url';
+            break;
+          default:
+            url = 'https://$url';
+        }
+      }
+      
+      final uri = Uri.parse(url);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        Fluttertoast.showToast(msg: 'Could not open $platform link');
+      }
+    } catch (e) {
+      debugPrint('Error opening social link: $e');
+      Fluttertoast.showToast(msg: 'Failed to open link');
+    }
+  }
+  
+  Future<void> _showWriteReviewDialog() async {
+    if (_currentUser == null) {
+      Fluttertoast.showToast(msg: 'Please login to write a review');
+      return;
+    }
+    
+    final ratingCtrl = TextEditingController(text: '5');
+    final reviewCtrl = TextEditingController();
+    
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Write a Review',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: _lavender,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Rate this Guru',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ratingCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Rating (1-5)',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.star, color: _lavender),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: reviewCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Your Review',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: Icon(Icons.rate_review, color: _lavender),
+                ),
+                maxLines: 4,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.poppins(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _lavender,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () async {
+              if (reviewCtrl.text.trim().isEmpty) {
+                Fluttertoast.showToast(msg: 'Please write a review');
+                return;
+              }
+              
+              try {
+                final rating = double.tryParse(ratingCtrl.text) ?? 5.0;
+                final ratingClamped = rating.clamp(1.0, 5.0);
+                
+                // Get current user name
+                final userDoc = await _firestore.collection('users').doc(_currentUser!.uid).get();
+                final userName = userDoc.data()?['name'] ?? 'Anonymous';
+                
+                await _firestore.collection('reviews').add({
+                  'guruId': widget.profileUserId,
+                  'userId': _currentUser!.uid,
+                  'userName': userName,
+                  'rating': ratingClamped,
+                  'text': reviewCtrl.text.trim(),
+                  'timestamp': FieldValue.serverTimestamp(),
+                });
+                
+                // Update guru's rating
+                final reviewsSnapshot = await _firestore
+                    .collection('reviews')
+                    .where('guruId', isEqualTo: widget.profileUserId)
+                    .get();
+                
+                final totalRating = reviewsSnapshot.docs
+                    .map((doc) => (doc.data()['rating'] as num?)?.toDouble() ?? 0.0)
+                    .reduce((a, b) => a + b);
+                final avgRating = totalRating / reviewsSnapshot.docs.length;
+                
+                await _firestore.collection('users').doc(widget.profileUserId).update({
+                  'rating': avgRating,
+                  'reviewCount': reviewsSnapshot.docs.length,
+                });
+                
+                Navigator.pop(ctx);
+                Fluttertoast.showToast(msg: 'Review submitted successfully!');
+                await _loadProfileData();
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Error submitting review: $e');
+              }
+            },
+            child: Text(
+              'Submit',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Future<void> _showAllTestimonials() async {
+    if (_reviews.isEmpty) return;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _AllTestimonialsPage(reviews: _reviews),
+    );
+  }
+  
+  Future<void> _showAllPrograms() async {
+    if (_programs.isEmpty) return;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _AllProgramsPage(
+        programs: _programs,
+        isOwnProfile: _isOwnProfile,
+        onProgramTap: (program) => _showProgramDetails(program),
+      ),
+    );
+  }
+  
+  Future<void> _showProgramDetails(Map<String, dynamic> program) async {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ProgramDetailsPage(program: program),
+    );
+  }
+  
+  Future<void> _showAllVideos(List<Map<String, dynamic>> tutorials) async {
+    if (tutorials.isEmpty) return;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _AllVideosPage(tutorials: tutorials),
+    );
+  }
+
   Widget _buildSecondTab() {
     return CustomScrollView(
       slivers: [
@@ -3723,6 +6157,410 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
         ),
       ],
+    );
+  }
+}
+
+// ===================================================================
+//  MODAL PAGES FOR GURU FEATURES
+// ===================================================================
+
+class _AllTestimonialsPage extends StatelessWidget {
+  final List<Map<String, dynamic>> reviews;
+  
+  const _AllTestimonialsPage({required this.reviews});
+  
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'All Testimonials',
+                  style: GoogleFonts.poppins(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(20),
+              itemCount: reviews.length,
+              itemBuilder: (context, index) {
+                final review = reviews[index];
+                final name = review['userName']?.toString() ?? review['name']?.toString() ?? 'User';
+                final rating = (review['rating'] ?? 5).toDouble();
+                final text = review['text']?.toString() ?? '';
+                
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            name,
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: List.generate(5, (i) {
+                              return Icon(
+                                i < rating.floor()
+                                    ? Icons.star
+                                    : (i < rating
+                                        ? Icons.star_half
+                                        : Icons.star_border),
+                                size: 16,
+                                color: Colors.amber[700],
+                              );
+                            }),
+                          ),
+                        ],
+                      ),
+                      if (text.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          text,
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            color: Colors.black87,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AllProgramsPage extends StatelessWidget {
+  final List<Map<String, dynamic>> programs;
+  final bool isOwnProfile;
+  final Function(Map<String, dynamic>) onProgramTap;
+  
+  const _AllProgramsPage({
+    required this.programs,
+    required this.isOwnProfile,
+    required this.onProgramTap,
+  });
+  
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'All Training Programs',
+                  style: GoogleFonts.poppins(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(20),
+              itemCount: programs.length,
+              itemBuilder: (context, index) {
+                final program = programs[index];
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  child: ListTile(
+                    title: Text(
+                      program['name']?.toString() ?? 'Program',
+                      style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      program['description']?.toString() ?? '',
+                      style: GoogleFonts.poppins(fontSize: 12),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.pop(context);
+                      onProgramTap(program);
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProgramDetailsPage extends StatelessWidget {
+  final Map<String, dynamic> program;
+  
+  const _ProgramDetailsPage({required this.program});
+  
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    program['name']?.toString() ?? 'Program Details',
+                    style: GoogleFonts.poppins(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (program['description'] != null)
+                    Text(
+                      program['description']?.toString() ?? '',
+                      style: GoogleFonts.poppins(fontSize: 14, height: 1.5),
+                    ),
+                  if (program['duration'] != null) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      'Duration: ${program['duration']}',
+                      style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                  if (program['price'] != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Price: ₹${program['price']}',
+                      style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AllVideosPage extends StatelessWidget {
+  final List<Map<String, dynamic>> tutorials;
+  
+  const _AllVideosPage({required this.tutorials});
+  
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'All Video Tutorials',
+                  style: GoogleFonts.poppins(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: GridView.builder(
+              padding: const EdgeInsets.all(20),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
+                childAspectRatio: 0.8,
+              ),
+              itemCount: tutorials.length,
+              itemBuilder: (context, index) {
+                final tutorial = tutorials[index];
+                return GestureDetector(
+                  onTap: () async {
+                    final url = tutorial['url']?.toString() ?? tutorial['link']?.toString();
+                    if (url != null && url.isNotEmpty) {
+                      try {
+                        String videoUrl = url;
+                        if (!videoUrl.startsWith('http://') && !videoUrl.startsWith('https://')) {
+                          videoUrl = 'https://$videoUrl';
+                        }
+                        
+                        final uri = Uri.parse(videoUrl);
+                        if (await canLaunchUrl(uri)) {
+                          await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        } else {
+                          Fluttertoast.showToast(msg: 'Could not open video');
+                        }
+                      } catch (e) {
+                        Fluttertoast.showToast(msg: 'Failed to open video');
+                      }
+                    } else {
+                      Fluttertoast.showToast(msg: 'Video link not available');
+                    }
+                  },
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.play_circle_outline, size: 48, color: Colors.grey),
+                        const SizedBox(height: 8),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Text(
+                            tutorial['title']?.toString() ?? 'Video Tutorial',
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

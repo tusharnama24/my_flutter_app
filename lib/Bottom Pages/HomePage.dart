@@ -1,20 +1,20 @@
-import 'package:classic_1/Bottom%20Pages/AddPostPage.dart';
+import 'package:halo/Bottom%20Pages/AddPostPage.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:classic_1/chat/chat_list_page.dart';
+import 'package:halo/chat/chat_list_page.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:video_player/video_player.dart';
-import 'package:classic_1/Profile%20Pages/wellness_profile_page.dart'
+import 'package:halo/Profile%20Pages/wellness_profile_page.dart'
 as wellness_profile;
-import 'package:classic_1/interest_selection_page.dart';
+import 'package:halo/interest_selection_page.dart';
 
 // ✅ NEW profile imports (aliased)
-import 'package:classic_1/Profile%20Pages/aspirant_profile_page.dart'
+import 'package:halo/Profile%20Pages/aspirant_profile_page.dart'
 as aspirant_profile;
-import 'package:classic_1/Profile%20Pages/guru_profile_page.dart'
+import 'package:halo/Profile%20Pages/guru_profile_page.dart'
 as guru_profile;
 
 import 'NotificationPage.dart';

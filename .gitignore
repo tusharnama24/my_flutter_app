@@ -1,46 +1,63 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
-.DS_Store
-.atom/
-.buildlog/
-.history
-.svn/
-migrate_working_dir/
-
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
-.idea/
-
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
+# =========================
+# Flutter & Dart
+# =========================
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
+.packages
 .pub-cache/
 .pub/
-#/build/
-build/app/
+build/
+coverage/
+.metadata
 
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Android Studio will place build artifacts here
+# =========================
+# Android
+# =========================
+android/key.properties
+android/app/*.keystore
 /android/app/debug
 /android/app/profile
 /android/app/release
-# ignore firebase/gcp key
+
+# =========================
+# Firebase / GCP secrets
+# =========================
 halo_backend/serviceAccountKey.json
+
+# =========================
+# iOS
+# =========================
+**/ios/Flutter/.last_build_id
+
+# =========================
+# IDEs & Editors
+# =========================
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.atom/
+
+# =========================
+# OS / Misc
+# =========================
+.DS_Store
+*.log
+*.class
+*.pyc
+*.swp
+.history
+.svn/
+buildlog/
+migrate_working_dir/
+
+# =========================
+# Obfuscation & Symbols
+# =========================
+app.*.symbols
+app.*.map.json
+
+*.keystore
+*.jks

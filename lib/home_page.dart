@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'interest_selection_page.dart';
-import 'package:classic_1/chat/chat_list_page.dart';
+import 'package:halo/chat/chat_list_page.dart';
 
 
 class HomePage extends StatelessWidget {

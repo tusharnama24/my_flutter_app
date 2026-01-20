@@ -1,6 +1,6 @@
-import 'package:classic_1/Category/createaspirantaccount.dart';
-import 'package:classic_1/Category/createguruaccount.dart';
-import 'package:classic_1/Category/createwellnessaccount.dart';
+import 'package:halo/Category/createaspirantaccount.dart';
+import 'package:halo/Category/createguruaccount.dart';
+import 'package:halo/Category/createwellnessaccount.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 

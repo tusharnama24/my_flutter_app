@@ -4,11 +4,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 // ✅ NEW profile imports (same pattern as HomePage)
-import 'package:classic_1/Profile%20Pages/aspirant_profile_page.dart'
+import 'package:halo/Profile%20Pages/aspirant_profile_page.dart'
 as aspirant_profile;
-import 'package:classic_1/Profile%20Pages/guru_profile_page.dart'
+import 'package:halo/Profile%20Pages/guru_profile_page.dart'
 as guru_profile;
-import 'package:classic_1/Profile%20Pages/wellness_profile_page.dart'
+import 'package:halo/Profile%20Pages/wellness_profile_page.dart'
 as wellness_profile;
 
 // ------- THEME CONSTANTS (MATCHING YOUR DESIGN SYSTEM) -------
@@ -49,15 +49,15 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kSecondaryColor,
     backgroundImage: 'assets/categories/physical_fitness.jpg',
     subcategories: [
-      'fitness',
-      'strength training',
-      'cardio',
-      'hiit',
-      'running',
-      'gym',
-      'mobility',
-      'pilates',
-      'bodyweight',
+      'Fitness',
+      'Strength Training',
+      'Cardio',
+      'Hiit',
+      'Running',
+      'Gym',
+      'Mobility',
+      'Pilates',
+      'Bodyweight',
     ],
   ),
   WellnessCategory(
@@ -68,12 +68,12 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kPrimaryColor,
     backgroundImage: 'assets/categories/nutrition_diet.jpg',
     subcategories: [
-      'nutrition',
-      'diet',
-      'weight loss',
-      'supplements',
-      'meal plan',
-      'healthy eating',
+      'Nutrition',
+      'Diet',
+      'Weight Loss',
+      'Supplements',
+      'Meal Plan',
+      'Healthy Eating',
     ],
   ),
   WellnessCategory(
@@ -84,11 +84,11 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kSecondaryColor,
     backgroundImage: 'assets/categories/mind_body.jpg',
     subcategories: [
-      'yoga',
-      'meditation',
-      'mindfulness',
-      'stress management',
-      'sleep',
+      'Yoga',
+      'Meditation',
+      'Mindfulness',
+      'Stress Management',
+      'Sleep',
     ],
   ),
   WellnessCategory(
@@ -99,11 +99,11 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kPrimaryColor,
     backgroundImage: 'assets/categories/rehab_recovery.jpg',
     subcategories: [
-      'physiotherapy',
-      'rehab',
-      'injury recovery',
-      'post surgery',
-      'pain relief',
+      'Physiotherapy',
+      'Rehab',
+      'Injury Recovery',
+      'Post Surgery',
+      'Pain Relief',
     ],
   ),
   WellnessCategory(
@@ -114,11 +114,11 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kSecondaryColor,
     backgroundImage: 'assets/categories/lifestyle_wellness.jpg',
     subcategories: [
-      'lifestyle',
-      'habit',
-      'self care',
-      'productivity',
-      'wellness',
+      'Lifestyle',
+      'Habit',
+      'Self Care',
+      'Productivity',
+      'Wellness',
     ],
   ),
   WellnessCategory(
@@ -129,13 +129,13 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kPrimaryColor,
     backgroundImage: 'assets/categories/goals.jpg',
     subcategories: [
-      'weight loss goal',
-      'muscle gain goal',
-      'challenge',
-      'marathon',
-      'transformation',
-      'coaching',
-      'accountability',
+      'Weight Loss Goal',
+      'Muscle Gain Goal',
+      'Callenge',
+      'Marathon',
+      'Transformation',
+      'Coaching',
+      'Accountability',
     ],
   ),
 ];
@@ -476,7 +476,7 @@ class _SearchPageState extends State<SearchPage> {
                           crossAxisCount: crossAxisCount,
                           crossAxisSpacing: 16,
                           mainAxisSpacing: 16,
-                          childAspectRatio: 1.0,
+                          childAspectRatio: 0.92,
                         ),
                         itemBuilder: (context, index) {
                           final category = categories[index];
@@ -587,31 +587,38 @@ class _CategoryCardState extends State<_CategoryCard> {
               onTapCancel: () => _setPressed(false),
               onTapUp: (_) => _setPressed(false),
               child: Padding(
-                padding: const EdgeInsets.all(18.0),
+                padding: const EdgeInsets.all(16.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       widget.category.emoji,
-                      style: const TextStyle(fontSize: 28),
+                      style: const TextStyle(fontSize: 26),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.category.name,
-                      style: textTheme.titleMedium?.copyWith(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: const Color(0xFF1F1033),
+                    const SizedBox(height: 6),
+                    Flexible(
+                      child: Text(
+                        widget.category.name,
+                        style: textTheme.titleMedium?.copyWith(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF1F1033),
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3),
                     Text(
                       widget.category.subtitle,
                       style: textTheme.bodySmall?.copyWith(
-                        fontSize: 13,
+                        fontSize: 12,
                         color: Colors.grey.shade800,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),

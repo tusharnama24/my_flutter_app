@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:classic_1/newpostpage.dart';
+import 'package:halo/newpostpage.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
