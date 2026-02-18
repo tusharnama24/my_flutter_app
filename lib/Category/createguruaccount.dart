@@ -1,4 +1,5 @@
 import 'package:halo/main.dart';
+import 'package:halo/utils/search_utils.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -239,11 +240,14 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         password: _passwordController.text.trim(),
       );
 
+      final username = _usernameController.text.trim();
+      final fullName = _nameController.text.trim();
       // Store profile in Firestore (CLEAN SCHEMA)
       await _firestore.collection('users').doc(userCredential.user!.uid).set({
         'category': 'Guru',
-        'username': _usernameController.text.trim(),
-        'full_name': _nameController.text.trim(),
+        'username': username,
+        'full_name': fullName,
+        'searchTerms': buildSearchTerms(username: username, fullName: fullName),
         'phone': _phoneController.text.trim(),
         'email': _emailController.text.trim(),
         'date_of_birth': _dateofbirth.text.trim(),

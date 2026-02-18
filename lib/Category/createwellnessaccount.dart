@@ -1,4 +1,5 @@
 import 'package:halo/main.dart';
+import 'package:halo/utils/search_utils.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -235,11 +236,14 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         password: _passwordController.text.trim(),
       );
 
+      final username = _usernameController.text.trim();
+      final businessName = _nameController.text.trim();
       // Store additional business details in Firestore
       await _firestore.collection('users').doc(userCredential.user!.uid).set({
         'category': 'Wellness',
-        'username': _usernameController.text.trim(),
-        'business_name': _nameController.text.trim(),
+        'username': username,
+        'business_name': businessName,
+        'searchTerms': buildSearchTerms(username: username, businessName: businessName),
         'phone': _phoneController.text.trim(),
         'email': _emailController.text.trim(),
         'business_type': _selectedBusinessType,

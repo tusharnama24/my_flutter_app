@@ -286,44 +286,52 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
   Future<void> _loadPosts() async {
     try {
-      QuerySnapshot<Map<String, dynamic>> postsSnapshot;
-      try {
-        postsSnapshot = await _firestore
-            .collection('posts')
-            .where('userId', isEqualTo: widget.profileUserId)
-            .orderBy('timestamp', descending: true)
-            .limit(9)
-            .get();
-      } catch (_) {
-        try {
-          postsSnapshot = await _firestore
-              .collection('posts')
-              .where('userId', isEqualTo: widget.profileUserId)
-              .orderBy('createdAt', descending: true)
-              .limit(9)
-              .get();
-        } catch (_) {
-          postsSnapshot = await _firestore
-              .collection('posts')
-              .where('userId', isEqualTo: widget.profileUserId)
-              .limit(9)
-              .get();
-        }
-      }
+      final snapshot = await _firestore
+          .collection('posts')
+          .where('userId', isEqualTo: widget.profileUserId)
+          .limit(30)
+          .get();
 
-      _recentPosts = postsSnapshot.docs.map((doc) {
+      final list = snapshot.docs.map((doc) {
         final d = doc.data();
         return {
           'id': doc.id,
-          'imageUrl': d['imageUrl'] ?? '',
+          'imageUrl': _getPostImageUrl(d),
           'caption': d['caption'] ?? '',
           'timestamp': d['timestamp'] ?? d['createdAt'],
         };
       }).toList();
+
+      list.sort((a, b) {
+        final aTs = a['timestamp'];
+        final bTs = b['timestamp'];
+        if (aTs == null) return 1;
+        if (bTs == null) return -1;
+        if (aTs is Timestamp && bTs is Timestamp) return bTs.compareTo(aTs);
+        return 0;
+      });
+
+      _recentPosts = list;
+      if (mounted) setState(() {});
     } catch (e) {
       debugPrint('Error loading posts: $e');
       _recentPosts = [];
+      if (mounted) setState(() {});
     }
+  }
+
+  /// Resolves post image URL from AddPostPage format (images/media) or legacy (imageUrl).
+  static String? _getPostImageUrl(Map<String, dynamic> data) {
+    final imageUrl = data['imageUrl']?.toString();
+    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
+    final images = data['images'];
+    if (images is List && images.isNotEmpty) return images.first?.toString();
+    final media = data['media'];
+    if (media is List && media.isNotEmpty) {
+      final first = media.first;
+      if (first is Map && first['url'] != null) return first['url']?.toString();
+    }
+    return null;
   }
 
   Future<void> _loadReviews() async {
@@ -1194,7 +1202,8 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())
             : NestedScrollView(
-          headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
+          headerSliverBuilder:
+              (BuildContext context, bool innerBoxIsScrolled) {
             return [
               SliverAppBar(
                 pinned: true,
@@ -1211,33 +1220,46 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                     icon: const Icon(Icons.add_box_outlined),
                     onPressed: _openPostCreation,
                   ),
+
+                  /// ⚡ OPTIMIZED POPUP MENU
                   PopupMenuButton<String>(
-                    onSelected: (value) async {
+                    onSelected: (value) {
                       if (value == 'Edit Profile') {
-                        await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => EditProfilePage(
-                                  initialName: _businessName,
-                                  initialUsername: _username,
-                                  initialBio: _bio,
-                                  initialGender: '',
-                                  initialprofessiontype: '',
-                                )));
-                        _loadProfileData();
-                      } else if (value == 'Settings') {
-                        final result = await Navigator.push(
+                        Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (ctx) => SettingsPage()),
-                        );
-                        if (result == 'logout') {
-                          await _auth.signOut();
-                          Navigator.pushReplacement(
+                            builder: (_) => EditProfilePage(
+                              initialName: _businessName,
+                              initialUsername: _username,
+                              initialBio: _bio,
+                              initialGender: '',
+                              initialprofessiontype: '',
+                            ),
+                          ),
+                        ).then((_) {
+                          // reload AFTER coming back, non-blocking
+                          if (!mounted) return;
+                          _loadProfileData();
+                        });
+                      } else if (value == 'Settings') {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => SettingsPage(),
+                          ),
+                        ).then((result) async {
+                          if (result == 'logout') {
+                            await _auth.signOut();
+                            if (!mounted) return;
+
+                            Navigator.pushReplacement(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => LoginPage()));
-                        }
+                                builder: (_) => LoginPage(),
+                              ),
+                            );
+                          }
+                        });
                       }
                     },
                     itemBuilder: (context) => const [
@@ -1257,9 +1279,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   background: _coverWidget(context),
                 ),
               ),
+
               SliverToBoxAdapter(
                 child: _buildProfileHeaderSection(),
               ),
+
               SliverPersistentHeader(
                 pinned: true,
                 delegate: _SliverAppBarDelegate(
@@ -1282,7 +1306,8 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                         icon: Icon(Icons.grid_on_outlined, size: 24),
                       ),
                       Tab(
-                        icon: Icon(Icons.dashboard_outlined, size: 24),
+                        icon:
+                        Icon(Icons.dashboard_outlined, size: 24),
                       ),
                     ],
                   ),
@@ -1301,6 +1326,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       ),
     );
   }
+
 
   // ===================================================================
   //  TAB CONTENT BUILDERS

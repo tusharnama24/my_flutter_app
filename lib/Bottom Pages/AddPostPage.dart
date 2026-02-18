@@ -7,6 +7,11 @@ import 'package:halo/services/cloudinary_service.dart'; // Cloudinary helper cla
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:halo/Bottom Pages/full_screen_camera_page.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+
+
 
 // THEME CONSTANTS (match Login / Home)
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -103,11 +108,26 @@ class _AddPostPageState extends State<AddPostPage> {
     } catch (_) {}
   }
 
-  void _showCamera() {
-    if (!_isCameraInitialized) return;
-    setState(() {
-      _showCameraPreview = true;
-    });
+  Future<void> _openFullScreenCamera() async {
+    if (_cameras == null || _cameras!.isEmpty) return;
+
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => FullScreenCameraPage(cameras: _cameras!),
+      ),
+    );
+
+    if (result is XFile) {
+      setState(() {
+        if (result.path.endsWith('.mp4')) {
+          _selectedVideos = [result];
+        } else {
+          _selectedImages.add(result);
+        }
+      });
+    }
   }
 
   void _hideCamera() {
@@ -195,8 +215,7 @@ class _AddPostPageState extends State<AddPostPage> {
   Future<void> _submitPost() async {
     if (_selectedImages.isEmpty && _selectedVideos.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text("Please select at least one image or a video.")),
+        const SnackBar(content: Text("Please select at least one image or a video.")),
       );
       return;
     }
@@ -212,27 +231,73 @@ class _AddPostPageState extends State<AddPostPage> {
     setState(() => _isLoading = true);
 
     try {
+      final userId = FirebaseAuth.instance.currentUser?.uid;
+
+      if (userId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please sign in to post")),
+        );
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      final postId = FirebaseFirestore.instance
+          .collection("posts")
+          .doc()
+          .id;
+
       List<Map<String, dynamic>> mediaList = [];
 
+      // Upload images to Firebase Storage
       for (var image in _selectedImages) {
-        String? url =
-        await _cloudinaryService.uploadMedia(image.path, isVideo: false);
-        if (url != null) {
-          mediaList.add({'type': 'image', 'url': url});
-        }
+        final ref = FirebaseStorage.instance
+            .ref('users/$userId/posts/$postId-${DateTime.now().millisecondsSinceEpoch}.jpg');
+
+        await ref.putFile(File(image.path));
+        final imageUrl = await ref.getDownloadURL();
+
+        mediaList.add({
+          'type': 'image',
+          'url': imageUrl,
+        });
       }
 
-      for (var video in _selectedVideos) {
-        String? url =
-        await _cloudinaryService.uploadMedia(video.path, isVideo: true);
-        if (url != null) {
-          mediaList.add({'type': 'video', 'url': url});
-        }
+// 🔹 Upload images
+      for (var image in _selectedImages) {
+        final ref = FirebaseStorage.instance
+            .ref('users/$userId/posts/$postId-${DateTime.now().millisecondsSinceEpoch}.jpg');
+
+        await ref.putFile(File(image.path));
+        final imageUrl = await ref.getDownloadURL();
+
+        mediaList.add({
+          'type': 'image',
+          'url': imageUrl,
+        });
       }
+
+// 🔹 Upload videos  ✅ ADD THIS HERE
+      for (var video in _selectedVideos) {
+        final ref = FirebaseStorage.instance
+            .ref('users/$userId/posts/$postId-${DateTime.now().millisecondsSinceEpoch}.mp4');
+
+        await ref.putFile(File(video.path));
+        final videoUrl = await ref.getDownloadURL();
+
+        mediaList.add({
+          'type': 'video',
+          'url': videoUrl,
+        });
+      }
+
 
       final mentions = _extractMentions(caption);
 
-      await FirebaseFirestore.instance.collection("posts").add({
+      await FirebaseFirestore.instance
+          .collection("posts")
+          .doc(postId)
+          .set({
+        "userId": userId,
         "media": mediaList,
         "images": mediaList
             .where((m) => m['type'] == 'image')
@@ -241,8 +306,13 @@ class _AddPostPageState extends State<AddPostPage> {
         "caption": caption,
         "location": _locationController.text.trim(),
         "tags": _selectedTags,
-        "mentions": mentions, // usernames from @likeThis
+        "mentions": mentions,
         "createdAt": FieldValue.serverTimestamp(),
+        "timestamp": FieldValue.serverTimestamp(),
+      });
+
+      await FirebaseFirestore.instance.collection('users').doc(userId).update({
+        'postsCount': FieldValue.increment(1),
       });
 
       if (!mounted) return;
@@ -397,41 +467,83 @@ class _AddPostPageState extends State<AddPostPage> {
     return Expanded(
       child: GestureDetector(
         onTap: isDisabled ? null : onTap,
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 150),
-          opacity: isDisabled ? 0.5 : 1.0,
-          child: Container(
-            height: 84,
-            decoration: BoxDecoration(
-              gradient: color != null
-                  ? LinearGradient(
-                colors: [
-                  color.withOpacity(0.85),
-                  color.withOpacity(0.65),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              )
-                  : null,
-              color: color == null ? Colors.grey[200] : null,
-              borderRadius: BorderRadius.circular(18),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          height: 100,
+          decoration: BoxDecoration(
+            gradient: color != null
+                ? LinearGradient(
+              colors: [
+                color.withOpacity(0.9),
+                color.withOpacity(0.7),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            )
+                : LinearGradient(
+              colors: [
+                kPrimaryColor.withOpacity(0.15),
+                kPrimaryColor.withOpacity(0.08),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, color: Colors.black87, size: 24),
-                  const SizedBox(height: 6),
-                  Text(
-                    label,
-                    style: GoogleFonts.poppins(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ],
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isDisabled
+                  ? Colors.grey.shade300
+                  : (color ?? kPrimaryColor).withOpacity(0.3),
+              width: 1.5,
+            ),
+            boxShadow: isDisabled
+                ? []
+                : [
+              BoxShadow(
+                color: (color ?? kPrimaryColor).withOpacity(0.2),
+                blurRadius: 12,
+                spreadRadius: -2,
+                offset: const Offset(0, 4),
               ),
+            ],
+          ),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.9),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    icon,
+                    color: isDisabled
+                        ? Colors.grey.shade400
+                        : (color ?? kSecondaryColor),
+                    size: 26,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isDisabled
+                        ? Colors.grey.shade400
+                        : Colors.black87,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -481,7 +593,7 @@ class _AddPostPageState extends State<AddPostPage> {
           'Preview',
           style: textTheme.labelMedium?.copyWith(
             fontWeight: FontWeight.w600,
-            color: Colors.grey.shade800,
+            color: Colors.black,
           ),
         ),
         const SizedBox(height: 8),
@@ -521,7 +633,7 @@ class _AddPostPageState extends State<AddPostPage> {
                   subtitle: Text(
                     'Just now',
                     style: textTheme.bodySmall?.copyWith(
-                      color: Colors.grey.shade600,
+                      color: Colors.black87,
                     ),
                   ),
                   trailing: const Icon(Icons.more_horiz_rounded),
@@ -616,7 +728,7 @@ class _AddPostPageState extends State<AddPostPage> {
                         horizontal: 16.0, vertical: 8.0),
                     child: _buildPreviewCaption(
                       textTheme.bodyMedium!.copyWith(
-                        color: Colors.grey.shade900,
+                        color: Colors.black,
                       ),
                     ),
                   ),
@@ -799,7 +911,7 @@ class _AddPostPageState extends State<AddPostPage> {
                 ? Text(
               fullName,
               style: textTheme.bodySmall?.copyWith(
-                color: Colors.grey.shade600,
+                color: Colors.black87,
               ),
             )
                 : null,
@@ -878,114 +990,190 @@ class _AddPostPageState extends State<AddPostPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        // Header row
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: kPrimaryColor.withOpacity(0.12),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.edit_outlined,
-                                      size: 16, color: kSecondaryColor),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    "New post",
-                                    style: textTheme.labelSmall?.copyWith(
-                                      color: kSecondaryColor,
-                                      fontWeight: FontWeight.w600,
-                                    ),
+                        // Header row with improved design
+                        Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 8),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      kPrimaryColor.withOpacity(0.2),
+                                      kPrimaryColor.withOpacity(0.1),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
                                   ),
-                                ],
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: kPrimaryColor.withOpacity(0.3),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.add_circle_outline_rounded,
+                                      size: 18,
+                                      color: kSecondaryColor,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      "Create Post",
+                                      style: textTheme.labelMedium?.copyWith(
+                                        color: kSecondaryColor,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Spacer(),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: kPrimaryColor.withOpacity(0.2),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Text(
+                                  'Halo',
+                                  style: GoogleFonts.pacifico(
+                                    fontSize: 22,
+                                    color: kSecondaryColor,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+
+                        // Location with improved styling
+                        Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: TextField(
+                            controller: _locationController,
+                            style: const TextStyle(color: Colors.black),
+                            decoration: InputDecoration(
+                              labelText: '📍 Location',
+                              hintText: 'Where are you?',
+                              hintStyle: textTheme.bodyMedium?.copyWith(
+                                color: Colors.black54,
+                              ),
+                              labelStyle: textTheme.labelMedium?.copyWith(
+                                color: kSecondaryColor,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              prefixIcon: Container(
+                                margin: const EdgeInsets.all(12),
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      kPrimaryColor.withOpacity(0.2),
+                                      kPrimaryColor.withOpacity(0.1),
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Icon(
+                                  Icons.location_on_rounded,
+                                  color: kSecondaryColor,
+                                  size: 20,
+                                ),
+                              ),
+                              filled: true,
+                              fillColor: Colors.white,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                borderSide: BorderSide(
+                                  color: kPrimaryColor.withOpacity(0.2),
+                                  width: 1.5,
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                borderSide: BorderSide(
+                                  color: kPrimaryColor.withOpacity(0.2),
+                                  width: 1.5,
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                borderSide: const BorderSide(
+                                  color: kPrimaryColor,
+                                  width: 2,
+                                ),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 16,
                               ),
                             ),
-                            const Spacer(),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+
+                        // Media selection section with improved design
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.photo_library_rounded,
+                              color: kSecondaryColor,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
                             Text(
-                              'Halo',
-                              style: GoogleFonts.pacifico(
-                                fontSize: 20,
-                                color: kSecondaryColor,
+                              "Add Media",
+                              style: textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: Colors.black,
+                                letterSpacing: 0.5,
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 12),
 
-                        // Location
-                        TextField(
-                          controller: _locationController,
-                          decoration: InputDecoration(
-                            labelText: 'Location',
-                            hintText: 'Add Location',
-                            labelStyle: textTheme.labelMedium?.copyWith(
-                              color: Colors.grey.shade700,
-                            ),
-                            prefixIcon:
-                            const Icon(Icons.location_on_outlined),
-                            filled: true,
-                            fillColor: const Color(0xFFF9F6FF),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(18),
-                              borderSide: BorderSide.none,
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(18),
-                              borderSide: const BorderSide(
-                                color: kPrimaryColor,
-                                width: 1.3,
-                              ),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 12,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 18),
-
-                        // Media selection label
-                        Text(
-                          "Media",
-                          style: textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: Colors.grey.shade900,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-
-                        // Media selection buttons row
+                        // Media selection buttons row - removed duplicate camera
                         Row(
                           children: [
                             _buildMediaButton(
                               icon: Icons.photo_library_rounded,
                               label: 'Gallery',
                               onTap: _pickImages,
-                              color: kPrimaryColor.withOpacity(0.85),
+                              color: kPrimaryColor,
                             ),
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 12),
                             _buildMediaButton(
                               icon: Icons.camera_alt_rounded,
                               label: 'Camera',
-                              onTap: _isCameraInitialized ? _showCamera : null,
-                              color: const Color(0xFFBDE0FE),
+                              onTap: _isCameraInitialized ? _openFullScreenCamera : null,
+                              color: kSecondaryColor,
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            _buildMediaButton(
-                              icon: Icons.videocam_rounded,
-                              label: 'Record',
-                              onTap: _isCameraInitialized ? _showCamera : null,
-                              color: const Color(0xFFFFB3B3),
-                            ),
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 12),
                             _buildMediaButton(
                               icon: Icons.video_library_rounded,
                               label: 'Video',
@@ -997,83 +1185,157 @@ class _AddPostPageState extends State<AddPostPage> {
 
                         const SizedBox(height: 16),
 
-                        // Selected Images Preview
+                        // Selected Images Preview with improved design
                         if (_selectedImages.isNotEmpty)
-                          SizedBox(
-                            height: 96,
-                            child: ListView.builder(
-                              scrollDirection: Axis.horizontal,
-                              itemCount: _selectedImages.length,
-                              itemBuilder: (context, index) {
-                                final img = _selectedImages[index];
-                                return Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 4.0),
-                                  child: Stack(
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius:
-                                        BorderRadius.circular(12),
-                                        child: Image.file(
-                                          File(img.path),
-                                          width: 96,
-                                          height: 96,
-                                          fit: BoxFit.cover,
-                                        ),
-                                      ),
-                                      Positioned(
-                                        top: 4,
-                                        right: 4,
-                                        child: GestureDetector(
-                                          onTap: () {
-                                            setState(() {
-                                              _selectedImages.removeAt(index);
-                                            });
-                                          },
-                                          child: Container(
-                                            padding: const EdgeInsets.all(4),
-                                            decoration: BoxDecoration(
-                                              color: Colors.black54,
-                                              shape: BoxShape.circle,
-                                            ),
-                                            child: const Icon(
-                                              Icons.close,
-                                              size: 14,
-                                              color: Colors.white,
+                          Container(
+                            margin: const EdgeInsets.only(top: 12),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: kPrimaryColor.withOpacity(0.2),
+                                width: 1.5,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: kPrimaryColor.withOpacity(0.1),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: SizedBox(
+                              height: 110,
+                              child: ListView.builder(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: _selectedImages.length,
+                                itemBuilder: (context, index) {
+                                  final img = _selectedImages[index];
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6.0),
+                                    child: Stack(
+                                      children: [
+                                        Container(
+                                          decoration: BoxDecoration(
+                                            borderRadius: BorderRadius.circular(16),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: Colors.black.withOpacity(0.1),
+                                                blurRadius: 8,
+                                                offset: const Offset(0, 2),
+                                              ),
+                                            ],
+                                          ),
+                                          child: ClipRRect(
+                                            borderRadius: BorderRadius.circular(16),
+                                            child: Image.file(
+                                              File(img.path),
+                                              width: 110,
+                                              height: 110,
+                                              fit: BoxFit.cover,
                                             ),
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
+                                        Positioned(
+                                          top: 6,
+                                          right: 6,
+                                          child: GestureDetector(
+                                            onTap: () {
+                                              setState(() {
+                                                _selectedImages.removeAt(index);
+                                              });
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.all(6),
+                                              decoration: BoxDecoration(
+                                                color: Colors.red,
+                                                shape: BoxShape.circle,
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: Colors.black.withOpacity(0.3),
+                                                    blurRadius: 6,
+                                                    offset: const Offset(0, 2),
+                                                  ),
+                                                ],
+                                              ),
+                                              child: const Icon(
+                                                Icons.close_rounded,
+                                                size: 16,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
                             ),
                           ),
 
                         if (_selectedVideos.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8.0),
+                          Container(
+                            margin: const EdgeInsets.only(top: 12),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 14),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.red.withOpacity(0.1),
+                                  Colors.red.withOpacity(0.05),
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: Colors.red.withOpacity(0.3),
+                                width: 1.5,
+                              ),
+                            ),
                             child: Row(
                               children: [
-                                const Icon(Icons.videocam_rounded,
-                                    size: 18, color: Colors.red),
-                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Icon(
+                                    Icons.videocam_rounded,
+                                    size: 20,
+                                    color: Colors.red,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
                                 Expanded(
                                   child: Text(
                                     '1 video selected',
-                                    style: textTheme.bodySmall?.copyWith(
-                                      color: Colors.grey.shade800,
+                                    style: textTheme.bodyMedium?.copyWith(
+                                      color: Colors.black,
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
                                 ),
-                                IconButton(
-                                  icon: const Icon(Icons.close, size: 18),
-                                  onPressed: () {
+                                GestureDetector(
+                                  onTap: () {
                                     setState(() {
                                       _selectedVideos = [];
                                     });
                                   },
+                                  child: Container(
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withOpacity(0.2),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.close_rounded,
+                                      size: 18,
+                                      color: Colors.red,
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),
@@ -1081,107 +1343,252 @@ class _AddPostPageState extends State<AddPostPage> {
 
                         if (_selectedImages.isEmpty &&
                             _selectedVideos.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4.0),
-                            child: Text(
-                              'No media selected yet.',
-                              style: textTheme.bodySmall?.copyWith(
-                                color: Colors.grey.shade500,
+                          Container(
+                            margin: const EdgeInsets.only(top: 12),
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: Colors.grey.shade200,
+                                width: 1.5,
+                                style: BorderStyle.solid,
                               ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.image_outlined,
+                                  color: Colors.grey.shade400,
+                                  size: 24,
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  'No media selected yet',
+                                  style: textTheme.bodySmall?.copyWith(
+                                    color: Colors.black87,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
 
                         const SizedBox(height: 16),
 
                         // Camera preview (if open)
-                        _buildCameraPreview(),
+                        // _buildCameraPreview(),
 
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 24),
 
-                        // Caption
-                        TextField(
-                          controller: _captionController,
-                          maxLines: 3,
-                          decoration: InputDecoration(
-                            labelText: 'Caption',
-                            hintText:
-                            'Write something... you can mention using @username',
-                            alignLabelWithHint: true,
-                            labelStyle: textTheme.labelMedium?.copyWith(
-                              color: Colors.grey.shade700,
+                        // Caption with improved styling
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.edit_note_rounded,
+                              color: kSecondaryColor,
+                              size: 20,
                             ),
-                            filled: true,
-                            fillColor: const Color(0xFFF9F6FF),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(18),
-                              borderSide: BorderSide.none,
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(18),
-                              borderSide: const BorderSide(
-                                color: kPrimaryColor,
-                                width: 1.3,
+                            const SizedBox(width: 8),
+                            Text(
+                              "Caption",
+                              style: textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: Colors.black,
+                                letterSpacing: 0.5,
                               ),
                             ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 12,
-                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
                           ),
-                          onChanged: _onCaptionChanged,
+                          child: TextField(
+                            controller: _captionController,
+                            maxLines: 4,
+                            style: const TextStyle(color: Colors.black),
+                            decoration: InputDecoration(
+                              hintText:
+                              'Share your thoughts... Use @username to mention someone',
+                              hintStyle: textTheme.bodyMedium?.copyWith(
+                                color: Colors.black54,
+                              ),
+                              alignLabelWithHint: true,
+                              prefixIcon: Container(
+                                margin: const EdgeInsets.all(12),
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      kPrimaryColor.withOpacity(0.2),
+                                      kPrimaryColor.withOpacity(0.1),
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Icon(
+                                  Icons.text_fields_rounded,
+                                  color: kSecondaryColor,
+                                  size: 20,
+                                ),
+                              ),
+                              filled: true,
+                              fillColor: Colors.white,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                borderSide: BorderSide(
+                                  color: kPrimaryColor.withOpacity(0.2),
+                                  width: 1.5,
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                borderSide: BorderSide(
+                                  color: kPrimaryColor.withOpacity(0.2),
+                                  width: 1.5,
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                borderSide: const BorderSide(
+                                  color: kPrimaryColor,
+                                  width: 2,
+                                ),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 16,
+                              ),
+                            ),
+                            onChanged: _onCaptionChanged,
+                          ),
                         ),
 
                         // @mention suggestions dropdown
                         _buildMentionSuggestions(textTheme),
 
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 24),
 
-                        // Tags selection
-                        Text(
-                          "Tags / Interests",
-                          style: textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: Colors.grey.shade900,
-                          ),
+                        // Tags selection with improved design
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.tag_rounded,
+                              color: kSecondaryColor,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              "Tags / Interests",
+                              style: textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: Colors.black,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: -4,
-                          children: _availableTags.map((tag) {
-                            final selected = _selectedTags.contains(tag);
-                            return GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  selected
-                                      ? _selectedTags.remove(tag)
-                                      : _selectedTags.add(tag);
-                                });
-                              },
-                              child: Chip(
-                                label: Text(
-                                  tag,
-                                  style: textTheme.bodySmall?.copyWith(
-                                    color: selected
-                                        ? kSecondaryColor
-                                        : Colors.black87,
-                                    fontWeight: selected
-                                        ? FontWeight.w600
-                                        : FontWeight.w400,
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: kPrimaryColor.withOpacity(0.2),
+                              width: 1.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: kPrimaryColor.withOpacity(0.08),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: _availableTags.map((tag) {
+                              final selected = _selectedTags.contains(tag);
+                              return GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    selected
+                                        ? _selectedTags.remove(tag)
+                                        : _selectedTags.add(tag);
+                                  });
+                                },
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 200),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 10),
+                                  decoration: BoxDecoration(
+                                    gradient: selected
+                                        ? LinearGradient(
+                                      colors: [
+                                        kPrimaryColor.withOpacity(0.25),
+                                        kPrimaryColor.withOpacity(0.15),
+                                      ],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                    )
+                                        : null,
+                                    color: selected ? null : Colors.grey.shade50,
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: selected
+                                          ? kPrimaryColor
+                                          : Colors.grey.shade300,
+                                      width: selected ? 2 : 1.5,
+                                    ),
+                                    boxShadow: selected
+                                        ? [
+                                      BoxShadow(
+                                        color: kPrimaryColor.withOpacity(0.3),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ]
+                                        : [],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (selected)
+                                        Icon(
+                                          Icons.check_circle_rounded,
+                                          size: 16,
+                                          color: kSecondaryColor,
+                                        ),
+                                      if (selected) const SizedBox(width: 6),
+                                      Text(
+                                        tag,
+                                        style: textTheme.bodySmall?.copyWith(
+                                          color: selected
+                                              ? kSecondaryColor
+                                              : Colors.black87,
+                                          fontWeight: selected
+                                              ? FontWeight.w700
+                                              : FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                backgroundColor: selected
-                                    ? kPrimaryColor.withOpacity(0.16)
-                                    : Colors.white,
-                                side: BorderSide(
-                                  color: selected
-                                      ? kPrimaryColor
-                                      : Colors.grey.shade400,
-                                ),
-                                visualDensity: VisualDensity.compact,
-                              ),
-                            );
-                          }).toList(),
+                              );
+                            }).toList(),
+                          ),
                         ),
 
                         const SizedBox(height: 24),
@@ -1191,15 +1598,26 @@ class _AddPostPageState extends State<AddPostPage> {
 
                         const SizedBox(height: 24),
 
-                        // Submit button
-                        SizedBox(
-                          height: 48,
+                        // Submit button with improved design
+                        Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          height: 56,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(28),
+                            boxShadow: [
+                              BoxShadow(
+                                color: kSecondaryColor.withOpacity(0.4),
+                                blurRadius: 20,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
+                          ),
                           child: ElevatedButton(
                             onPressed: _isLoading ? null : _submitPost,
                             style: ElevatedButton.styleFrom(
                               padding: EdgeInsets.zero,
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(22),
+                                borderRadius: BorderRadius.circular(28),
                               ),
                               elevation: 0,
                               backgroundColor: Colors.transparent,
@@ -1212,27 +1630,39 @@ class _AddPostPageState extends State<AddPostPage> {
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
                                 ),
-                                borderRadius: BorderRadius.circular(22),
+                                borderRadius: BorderRadius.circular(28),
                               ),
                               child: Center(
                                 child: _isLoading
                                     ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
+                                  width: 24,
+                                  height: 24,
                                   child: CircularProgressIndicator(
-                                    strokeWidth: 2,
+                                    strokeWidth: 2.5,
                                     valueColor:
                                     AlwaysStoppedAnimation<Color>(
                                         Colors.white),
                                   ),
                                 )
-                                    : Text(
-                                  'Post',
-                                  style:
-                                  textTheme.labelLarge?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white,
-                                  ),
+                                    : Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(
+                                      Icons.send_rounded,
+                                      color: Colors.white,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Text(
+                                      'Post to Halo',
+                                      style:
+                                      textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ),

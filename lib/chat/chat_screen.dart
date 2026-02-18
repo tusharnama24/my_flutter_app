@@ -630,9 +630,11 @@ class _InputBar extends StatelessWidget {
                   maxLines: 5,
                   onChanged: onChanged,
                   textCapitalization: TextCapitalization.sentences,
+                  style: const TextStyle(color: Colors.black),
                   decoration: const InputDecoration(
                     isDense: true,
                     hintText: 'Message...',
+                    hintStyle: TextStyle(color: Colors.black54),
                     border: InputBorder.none,
                   ),
                   onSubmitted: (_) => onSend(),

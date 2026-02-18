@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'main.dart'; // for LoginPage
+import 'utils/search_utils.dart';
 
 class SignupPage extends StatefulWidget {
   @override
@@ -36,14 +37,17 @@ class _SignupPageState extends State<SignupPage> {
         );
 
         // 🔹 Save extra details in Firestore
+        final username = _usernameController.text.trim();
+        final name = _nameController.text.trim();
         await _firestore.collection('users').doc(userCredential.user!.uid).set({
-          "username": _usernameController.text.trim(),
-          "name": _nameController.text.trim(),
+          "username": username,
+          "name": name,
           "email": _emailController.text.trim(),
           "dob": _dobController.text.trim(),
           "gender": _selectedGender,
           "createdAt": FieldValue.serverTimestamp(),
           "lastSeen": FieldValue.serverTimestamp(),
+          "searchTerms": buildSearchTerms(name: name, username: username),
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -126,8 +130,11 @@ class _SignupPageState extends State<SignupPage> {
                 // Username
                 TextFormField(
                   controller: _usernameController,
+                  style: const TextStyle(color: Colors.black),
                   decoration: InputDecoration(
                     labelText: 'Username',
+                    labelStyle: const TextStyle(color: Colors.black87),
+                    hintStyle: const TextStyle(color: Colors.black54),
                     prefixIcon: Icon(Icons.person),
                     border: OutlineInputBorder(),
                   ),
@@ -139,8 +146,11 @@ class _SignupPageState extends State<SignupPage> {
                 // Full Name
                 TextFormField(
                   controller: _nameController,
+                  style: const TextStyle(color: Colors.black),
                   decoration: InputDecoration(
                     labelText: 'Full Name',
+                    labelStyle: const TextStyle(color: Colors.black87),
+                    hintStyle: const TextStyle(color: Colors.black54),
                     prefixIcon: Icon(Icons.person_outline),
                     border: OutlineInputBorder(),
                   ),
@@ -153,8 +163,11 @@ class _SignupPageState extends State<SignupPage> {
                 TextFormField(
                   controller: _dobController,
                   readOnly: true,
+                  style: const TextStyle(color: Colors.black),
                   decoration: InputDecoration(
                     labelText: 'Date of Birth (dd-MM-yyyy)',
+                    labelStyle: const TextStyle(color: Colors.black87),
+                    hintStyle: const TextStyle(color: Colors.black54),
                     prefixIcon: Icon(Icons.calendar_today),
                     border: OutlineInputBorder(),
                   ),
@@ -166,8 +179,10 @@ class _SignupPageState extends State<SignupPage> {
 
                 // Gender
                 DropdownButtonFormField<String>(
+                  style: const TextStyle(color: Colors.black),
                   decoration: InputDecoration(
                     labelText: 'Gender',
+                    labelStyle: const TextStyle(color: Colors.black87),
                     prefixIcon: Icon(Icons.person),
                     border: OutlineInputBorder(),
                   ),
@@ -175,7 +190,7 @@ class _SignupPageState extends State<SignupPage> {
                   items: ['Male', 'Female', 'Other']
                       .map((g) => DropdownMenuItem(
                     value: g,
-                    child: Text(g),
+                    child: Text(g, style: const TextStyle(color: Colors.black)),
                   ))
                       .toList(),
                   onChanged: (value) => setState(() {
@@ -189,8 +204,11 @@ class _SignupPageState extends State<SignupPage> {
                 // Email
                 TextFormField(
                   controller: _emailController,
+                  style: const TextStyle(color: Colors.black),
                   decoration: InputDecoration(
                     labelText: 'Email',
+                    labelStyle: const TextStyle(color: Colors.black87),
+                    hintStyle: const TextStyle(color: Colors.black54),
                     prefixIcon: Icon(Icons.email),
                     border: OutlineInputBorder(),
                   ),
@@ -205,8 +223,11 @@ class _SignupPageState extends State<SignupPage> {
                 TextFormField(
                   controller: _passwordController,
                   obscureText: true,
+                  style: const TextStyle(color: Colors.black),
                   decoration: InputDecoration(
                     labelText: 'Password',
+                    labelStyle: const TextStyle(color: Colors.black87),
+                    hintStyle: const TextStyle(color: Colors.black54),
                     prefixIcon: Icon(Icons.lock),
                     border: OutlineInputBorder(),
                   ),
@@ -218,8 +239,11 @@ class _SignupPageState extends State<SignupPage> {
                 TextFormField(
                   controller: _confirmPasswordController,
                   obscureText: true,
+                  style: const TextStyle(color: Colors.black),
                   decoration: InputDecoration(
                     labelText: 'Confirm Password',
+                    labelStyle: const TextStyle(color: Colors.black87),
+                    hintStyle: const TextStyle(color: Colors.black54),
                     prefixIcon: Icon(Icons.lock_outline),
                     border: OutlineInputBorder(),
                   ),

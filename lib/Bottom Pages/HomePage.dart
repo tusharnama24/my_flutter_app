@@ -1,3 +1,19 @@
+// HomePage.dart — Instagram-style (2025–2026) feed for Halo
+//
+// Implemented improvements:
+// 1. Flatter post cards: white, minimal shadow, ~10px radius
+// 2. Double-tap → animated heart overlay on post media (scale + fade, ~700ms, elastic)
+// 3. Like button: red when liked (#ED4956), Icons.favorite / favorite_border
+// 4. Natural like count: "Be the first to like this" / "Liked by you" / "Liked by you and X others" / "Liked by X people"
+// 5. Pull-to-refresh (RefreshIndicator) on main feed
+// 6. Segmented control at top: "For you" | "Following" (UI only — same feed for both)
+// 7. Stories ring gradient: #F56040 → #F77737 → #E1306C → #C13584
+// 8. CachedNetworkImage for profile photos and post images
+// 9. Instagram-style colors: #262626, #8E8E8E, #ED4956, white
+// 10. Typography/spacing: larger usernames/captions, padding, icon sizes ~26–28px
+//
+// Trade-off: For you/Following tabs do not change the query (UI only).
+
 import 'package:halo/Bottom%20Pages/AddPostPage.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -7,11 +23,16 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:video_player/video_player.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:halo/Profile%20Pages/wellness_profile_page.dart'
 as wellness_profile;
 import 'package:halo/interest_selection_page.dart';
+import 'package:halo/services/story_service.dart';
+import 'package:halo/models/story_model.dart';
+import 'package:halo/utils/story_utils.dart';
+import 'package:halo/story/story_viewer_page.dart';
+import 'package:halo/story/story_upload_sheet.dart';
 
-// ✅ NEW profile imports (aliased)
 import 'package:halo/Profile%20Pages/aspirant_profile_page.dart'
 as aspirant_profile;
 import 'package:halo/Profile%20Pages/guru_profile_page.dart'
@@ -20,10 +41,16 @@ as guru_profile;
 import 'NotificationPage.dart';
 import 'SearchPage.dart';
 
-// ---- THEME COLORS (matching LoginPage palette) ----
-const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
-const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep purple
-const Color kBackgroundColor = Color(0xFFF4F1FB); // Light lavender-gray
+// ---- THEME COLORS ----
+const Color kPrimaryColor = Color(0xFFA58CE3);
+const Color kSecondaryColor = Color(0xFF5B3FA3);
+const Color kBackgroundColor = Color(0xFFF4F1FB);
+
+// Instagram-style (2025) feed colors
+const Color kIgPrimaryText = Color(0xFF262626);
+const Color kIgSecondaryText = Color(0xFF8E8E8E);
+const Color kIgLikeRed = Color(0xFFED4956);
+const Color kIgPostBackground = Colors.white;
 
 class HomePage extends StatefulWidget {
   @override
@@ -31,15 +58,22 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-
-
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<RefreshIndicatorState> _refreshKey = GlobalKey<RefreshIndicatorState>();
   bool _promptedLocation = false;
   List<String> _interests = const [];
+  int _feedTabIndex = 0; // 0 = For you, 1 = Following (UI only)
 
   @override
   void initState() {
     super.initState();
+
+    StoryService().fetchStories().listen((stories) {
+      for (var story in stories) {
+        debugPrint('STORY → ${story.mediaUrl}');
+      }
+    });
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybePromptForLocation();
     });
@@ -167,6 +201,49 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildFeedSegmentedControl() {
+    return Container(
+      height: 40,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          _buildFeedTab(0, 'For you'),
+          _buildFeedTab(1, 'Following'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFeedTab(int index, String label) {
+    final selected = _feedTabIndex == index;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _feedTabIndex = index),
+        behavior: HitTestBehavior.opaque,
+        child: Center(
+          child: Text(
+            label,
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              color: selected ? kIgPrimaryText : kIgSecondaryText,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final textTheme = GoogleFonts.poppinsTextTheme(
@@ -278,22 +355,29 @@ class _HomePageState extends State<HomePage> {
             ),
             child: SafeArea(
               top: false,
-              child: SingleChildScrollView(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-                child: Column(
-                  children: [
-                    // Stories section
-                    _StoriesStrip(),
-                    const SizedBox(height: 4),
-
-                    // Posts feed
-                    StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              child: RefreshIndicator(
+                key: _refreshKey,
+                onRefresh: () async {
+                  await Future.delayed(const Duration(milliseconds: 800));
+                  if (!mounted) return;
+                  setState(() {});
+                },
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+                  child: Column(
+                    children: [
+                      _StoriesStrip(),
+                      const SizedBox(height: 12),
+                      // For you | Following (UI only)
+                      _buildFeedSegmentedControl(),
+                      const SizedBox(height: 8),
+                      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                       stream: FirebaseFirestore.instance
                           .collection('posts')
-                          .orderBy('createdAt', descending: true)
+                          .limit(100)
                           .snapshots(),
-                      builder: (context, snapshot) {
+                        builder: (context, snapshot) {
                         if (snapshot.connectionState ==
                             ConnectionState.waiting) {
                           return const Padding(
@@ -309,20 +393,43 @@ class _HomePageState extends State<HomePage> {
                           );
                         }
 
-                        final docs = snapshot.data?.docs ?? [];
-                        List<QueryDocumentSnapshot<Map<String, dynamic>>>
-                        filtered = docs;
+                        final allDocs = snapshot.data?.docs ?? [];
+                        // Sort by timestamp or createdAt (newest first) so guru/aspirant/wellness posts appear
+                        final docs = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(allDocs)
+                          ..sort((a, b) {
+                            final aData = a.data();
+                            final bData = b.data();
+                            final aTs = aData['timestamp'] ?? aData['createdAt'];
+                            final bTs = bData['timestamp'] ?? bData['createdAt'];
+                            if (aTs == null) return 1;
+                            if (bTs == null) return -1;
+                            if (aTs is Timestamp && bTs is Timestamp) return bTs.compareTo(aTs);
+                            return 0;
+                          });
+
+                        List<QueryDocumentSnapshot<Map<String, dynamic>>> filtered = docs;
 
                         if (_interests.isNotEmpty) {
                           filtered = docs.where((d) {
-                            final tags = (d.data()['tags'] as List?)
+                            final data = d.data();
+
+                            final accountType =
+                            (data['accountType'] ?? '').toString().toLowerCase();
+
+                            // ✅ ALWAYS show guru posts
+                            if (accountType == 'guru') return true;
+
+                            final tags = (data['tags'] as List?)
                                 ?.map((e) => e.toString())
                                 .toList() ??
-                                const [];
+                                [];
+
                             if (tags.isEmpty) return true;
+
                             return tags.any((t) => _interests.contains(t));
                           }).toList();
                         }
+
 
                         if (filtered.isEmpty) {
                           return Padding(
@@ -362,6 +469,8 @@ class _HomePageState extends State<HomePage> {
                                     const [];
                             final images = List<String>.from(
                                 data['images'] ?? const []);
+                            // Profile posts (guru/aspirant/wellness) may use single imageUrl
+                            final imageUrl = (data['imageUrl'] as String?)?.trim() ?? '';
                             final caption =
                             (data['caption'] ?? '').toString();
                             final location =
@@ -375,86 +484,216 @@ class _HomePageState extends State<HomePage> {
                                 .toString()
                                 .substring(0, 16)
                                 : '';
+                            final userId = (data['userId'] ?? '').toString();
 
                             return Padding(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 4.0, vertical: 6.0),
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(22),
+                                  color: kIgPostBackground,
+                                  borderRadius: BorderRadius.circular(10),
                                   boxShadow: [
                                     BoxShadow(
-                                      blurRadius: 24,
-                                      spreadRadius: -12,
-                                      offset: const Offset(0, 16),
-                                      color: Colors.black.withOpacity(0.08),
+                                      color: Colors.black.withOpacity(0.06),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
                                     ),
                                   ],
                                 ),
                                 child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(22),
+                                  borderRadius: BorderRadius.circular(10),
                                   child: Column(
                                     crossAxisAlignment:
                                     CrossAxisAlignment.start,
                                     children: [
                                       // Header
-                                      ListTile(
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 14, vertical: 4),
-                                        leading: CircleAvatar(
-                                          backgroundImage:
-                                          const AssetImage(
-                                              'assets/images/Profile.png'),
-                                          radius: 20,
-                                        ),
-                                        title: Text(
-                                          location.isNotEmpty
-                                              ? location
-                                              : 'Post',
-                                          style: textTheme.labelLarge
-                                              ?.copyWith(
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        subtitle: Text(
-                                          createdText,
-                                          style: textTheme.bodySmall
-                                              ?.copyWith(
-                                            color: Colors.grey.shade600,
-                                          ),
-                                        ),
-                                        trailing: IconButton(
-                                          icon: const Icon(
-                                              Icons.more_horiz_rounded),
-                                          onPressed: () {},
-                                        ),
-                                      ),
+                                      userId.isNotEmpty
+                                          ? StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                                              stream: FirebaseFirestore.instance
+                                                  .collection('users')
+                                                  .doc(userId)
+                                                  .snapshots(),
+                                              builder: (context, userSnapshot) {
+                                                final username = userSnapshot.hasData &&
+                                                        userSnapshot.data!.exists
+                                                    ? (userSnapshot.data!.data()?['username'] ?? 
+                                                       userSnapshot.data!.data()?['name'] ?? 
+                                                       userSnapshot.data!.data()?['full_name'] ??
+                                                       'User')
+                                                    : 'User';
+                                                
+                                                final profilePhoto = userSnapshot.hasData &&
+                                                        userSnapshot.data!.exists
+                                                    ? (userSnapshot.data!.data()?['profilePhoto'] as String?)
+                                                    : null;
+                                                final accountType = (userSnapshot.data!.data()?['accountType'] as String?)
+                                                    ?.toLowerCase() ?? 'aspirant';
 
-                                      // Media
-                                      if (media.isNotEmpty)
-                                        _PostMedia(media: media)
-                                      else if (images.isNotEmpty)
-                                        ClipRRect(
-                                          borderRadius:
-                                          BorderRadius.circular(18),
-                                          child: Image.network(
-                                            images.first,
-                                            height: 300,
-                                            width: double.infinity,
-                                            fit: BoxFit.cover,
-                                            errorBuilder:
-                                                (context, _, __) =>
-                                                Container(
-                                                  height: 300,
-                                                  color: Colors.grey[300],
-                                                  child: const Center(
-                                                      child: Icon(
-                                                          Icons.broken_image)),
+                                                return ListTile(
+                                                  contentPadding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 14, vertical: 6),
+                                                  leading: CircleAvatar(
+                                                    radius: 20,
+                                                    backgroundColor: Colors.grey.shade200,
+                                                    backgroundImage: profilePhoto != null && profilePhoto.isNotEmpty
+                                                        ? CachedNetworkImageProvider(profilePhoto)
+                                                        : const AssetImage(
+                                                            'assets/images/Profile.png')
+                                                            as ImageProvider,
+                                                    onBackgroundImageError: (_, __) {},
+                                                  ),
+                                                  title: Text(
+                                                    username,
+                                                    style: (textTheme.labelLarge ?? textTheme.bodyLarge)?.copyWith(
+                                                      fontWeight: FontWeight.w600,
+                                                      color: kIgPrimaryText,
+                                                      fontSize: 15,
+                                                    ),
+                                                  ),
+                                                  subtitle: Text(
+                                                    location.isNotEmpty
+                                                        ? location
+                                                        : createdText,
+                                                    style: textTheme.bodySmall
+                                                        ?.copyWith(
+                                                      color: kIgSecondaryText,
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                  trailing: IconButton(
+                                                    icon: const Icon(
+                                                        Icons.more_horiz_rounded),
+                                                    iconSize: 26,
+                                                    onPressed: () {},
+                                                  ),
+                                                  onTap: () {
+                                                    if (userId.isEmpty) return;
+                                                    if (accountType == 'wellness') {
+                                                      Navigator.push(
+                                                        context,
+                                                        MaterialPageRoute(
+                                                          builder: (_) =>
+                                                              wellness_profile.WellnessProfilePage(
+                                                                  profileUserId: userId),
+                                                        ),
+                                                      );
+                                                    } else if (accountType == 'guru') {
+                                                      Navigator.push(
+                                                        context,
+                                                        MaterialPageRoute(
+                                                          builder: (_) =>
+                                                              guru_profile.GuruProfilePage(
+                                                                  profileUserId: userId),
+                                                        ),
+                                                      );
+                                                    } else {
+                                                      Navigator.push(
+                                                        context,
+                                                        MaterialPageRoute(
+                                                          builder: (_) =>
+                                                              aspirant_profile.ProfilePage(
+                                                                  profileUserId: userId),
+                                                        ),
+                                                      );
+                                                    }
+                                                  },
+                                                );
+                                              },
+                                            )
+                                          : ListTile(
+                                              contentPadding:
+                                              const EdgeInsets.symmetric(
+                                                  horizontal: 14, vertical: 6),
+                                              leading: const CircleAvatar(
+                                                backgroundImage: AssetImage(
+                                                    'assets/images/Profile.png'),
+                                                radius: 20,
+                                              ),
+                                              title: Text(
+                                                'User',
+                                                style: (textTheme.labelLarge ?? textTheme.bodyLarge)?.copyWith(
+                                                  fontWeight: FontWeight.w600,
+                                                  color: kIgPrimaryText,
+                                                  fontSize: 15,
                                                 ),
-                                          ),
-                                        ),
+                                              ),
+                                              subtitle: Text(
+                                                location.isNotEmpty
+                                                    ? location
+                                                    : createdText,
+                                                style: textTheme.bodySmall
+                                                    ?.copyWith(
+                                                  color: kIgSecondaryText,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                              trailing: IconButton(
+                                                icon: const Icon(
+                                                    Icons.more_horiz_rounded),
+                                                iconSize: 26,
+                                                onPressed: () {},
+                                              ),
+                                            ),
+
+                                      // Media with double-tap heart (Instagram-style)
+                                      _DoubleTapHeartOverlay(
+                                        postId: filtered[index].id,
+                                        child: media.isNotEmpty
+                                            ? _PostMedia(media: media)
+                                            : (images.isNotEmpty
+                                                ? ClipRRect(
+                                                    borderRadius:
+                                                    BorderRadius.circular(8),
+                                                    child: CachedNetworkImage(
+                                                      imageUrl: images.first,
+                                                      height: 300,
+                                                      width: double.infinity,
+                                                      fit: BoxFit.cover,
+                                                      placeholder: (_, __) =>
+                                                          Container(
+                                                            height: 300,
+                                                            color: Colors.grey.shade200,
+                                                            child: const Center(
+                                                                child: CircularProgressIndicator()),
+                                                          ),
+                                                      errorWidget: (_, __, ___) =>
+                                                          Container(
+                                                            height: 300,
+                                                            color: Colors.grey[300],
+                                                            child: const Center(
+                                                                child: Icon(Icons.broken_image)),
+                                                          ),
+                                                    ),
+                                                  )
+                                                : imageUrl.isNotEmpty
+                                                    ? ClipRRect(
+                                                        borderRadius:
+                                                        BorderRadius.circular(8),
+                                                        child: CachedNetworkImage(
+                                                          imageUrl: imageUrl,
+                                                          height: 300,
+                                                          width: double.infinity,
+                                                          fit: BoxFit.cover,
+                                                          placeholder: (_, __) =>
+                                                              Container(
+                                                                height: 300,
+                                                                color: Colors.grey.shade200,
+                                                                child: const Center(
+                                                                    child: CircularProgressIndicator()),
+                                                              ),
+                                                          errorWidget: (_, __, ___) =>
+                                                              Container(
+                                                                height: 300,
+                                                                color: Colors.grey[300],
+                                                                child: const Center(
+                                                                    child: Icon(Icons.broken_image)),
+                                                              ),
+                                                        ),
+                                                      )
+                                                    : const SizedBox.shrink()),
+                                      ),
 
                                       // Actions
                                       _PostActions(
@@ -468,12 +707,14 @@ class _HomePageState extends State<HomePage> {
                                           padding:
                                           const EdgeInsets.symmetric(
                                               horizontal: 16.0,
-                                              vertical: 8.0),
+                                              vertical: 10.0),
                                           child: Text(
                                             caption,
                                             style:
                                             textTheme.bodyMedium?.copyWith(
-                                              color: Colors.grey.shade900,
+                                              color: kIgPrimaryText,
+                                              fontSize: 15,
+                                              height: 1.35,
                                             ),
                                           ),
                                         ),
@@ -491,6 +732,7 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
               ),
+            ),
             ),
           ),
 
@@ -623,18 +865,27 @@ class _HomePageState extends State<HomePage> {
 // ---------------------- Stories Strip ----------------------
 
 class _StoriesStrip extends StatelessWidget {
+  const _StoriesStrip({super.key});
+
   @override
   Widget build(BuildContext context) {
-    final textTheme = GoogleFonts.poppinsTextTheme(
-      Theme.of(context).textTheme,
-    );
+    final textTheme =
+    GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+
+    final myUid = FirebaseAuth.instance.currentUser?.uid;
+    if (myUid == null) {
+      return const SizedBox(height: 110);
+    }
+
+    // Keep stream instance stable
+    final storiesStream = StoryService().fetchStories();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // 🔹 Header
         Padding(
-          padding:
-          const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           child: Row(
             children: [
               Text(
@@ -645,64 +896,229 @@ class _StoriesStrip extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              Text(
-                'See all',
-                style: textTheme.bodySmall?.copyWith(
-                  color: kSecondaryColor,
-                  fontWeight: FontWeight.w500,
+              GestureDetector(
+                onTap: () {
+                  // TODO: Navigate to all stories page if needed
+                },
+                child: Text(
+                  'See all',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: kSecondaryColor,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],
           ),
         ),
+
+        // 🔹 Stories list
         SizedBox(
-          height: 96,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            itemCount: 10,
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            itemBuilder: (context, index) {
-              return Padding(
+          height: 110,
+          child: StreamBuilder<List<StoryModel>>(
+            stream: storiesStream,
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const Center(
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                );
+              }
+
+              final groupedStories =
+              groupStoriesByUser(snapshot.data!);
+              final userIds =
+              storyDisplayOrder(groupedStories, myUid);
+
+              return ListView.builder(
+                scrollDirection: Axis.horizontal,
                 padding:
-                const EdgeInsets.symmetric(horizontal: 6.0, vertical: 4),
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(2.5),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          colors: [
-                            kPrimaryColor,
-                            kSecondaryColor,
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                itemCount: userIds.length,
+                itemBuilder: (context, index) {
+                  final userId = userIds[index];
+
+                  // ======================
+                  // YOUR STORY
+                  // ======================
+                  if (userId == myUid) {
+                    final myStories = groupedStories[myUid] ?? [];
+                    final hasStories = myStories.isNotEmpty;
+                    final hasUnseen = myStories.any(
+                          (s) => !s.viewers.contains(myUid),
+                    );
+
+                    final photoUrl = hasStories
+                        ? myStories.first.userPhotoUrl
+                        : null;
+
+                    return GestureDetector(
+                      onTap: () {
+                        showModalBottomSheet(
+                          context: context,
+                          backgroundColor: Colors.transparent,
+                          isScrollControlled: true,
+                          builder: (_) => const StoryUploadSheet(),
+                        );
+                      },
+                      child: Padding(
+                        padding:
+                        const EdgeInsets.symmetric(horizontal: 6),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                _StoryAvatar(
+                                  imageUrl: photoUrl,
+                                  hasUnseen: hasStories && hasUnseen,
+                                  isSeen: hasStories && !hasUnseen,
+                                ),
+                                const Positioned(
+                                  bottom: 0,
+                                  right: 0,
+                                  child: CircleAvatar(
+                                    radius: 10,
+                                    backgroundColor: Colors.blue,
+                                    child: Icon(
+                                      Icons.add,
+                                      size: 16,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Your story',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.black87,
+                              ),
+                            ),
                           ],
                         ),
                       ),
-                      child: CircleAvatar(
-                        radius: 28,
-                        backgroundColor: Colors.white,
-                        child: CircleAvatar(
-                          radius: 26,
-                          backgroundImage:
-                          const AssetImage('assets/Profile.png'),
+                    );
+                  }
+
+                  // ======================
+                  // OTHER USERS
+                  // ======================
+                  final stories = groupedStories[userId] ?? [];
+                  if (stories.isEmpty) return const SizedBox.shrink();
+
+                  final hasUnseen = stories.any(
+                        (s) => !s.viewers.contains(myUid),
+                  );
+
+                  final first = stories.first;
+
+                  return GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              StoryViewerPage(stories: stories),
                         ),
+                      );
+                    },
+                    child: Padding(
+                      padding:
+                      const EdgeInsets.symmetric(horizontal: 6),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _StoryAvatar(
+                            imageUrl: first.userPhotoUrl,
+                            hasUnseen: hasUnseen,
+                            isSeen: !hasUnseen,
+                          ),
+                          const SizedBox(height: 6),
+                          SizedBox(
+                            width: 70,
+                            child: Text(
+                              first.username.isNotEmpty
+                                  ? first.username
+                                  : 'User',
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: textTheme.bodySmall?.copyWith(
+                                fontSize: 12,
+                                color: Colors.black87,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'User $index',
-                      style: textTheme.bodySmall?.copyWith(
-                        fontSize: 11,
-                        color: Colors.grey.shade800,
-                      ),
-                    ),
-                  ],
-                ),
+                  );
+                },
               );
             },
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 🔹 Reusable avatar with Instagram-style ring
+class _StoryAvatar extends StatelessWidget {
+  final String? imageUrl;
+  final bool hasUnseen;
+  final bool isSeen;
+
+  const _StoryAvatar({
+    required this.imageUrl,
+    required this.hasUnseen,
+    required this.isSeen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: hasUnseen
+            ? const LinearGradient(
+          colors: [
+            Color(0xFFF56040),
+            Color(0xFFF77737),
+            Color(0xFFE1306C),
+            Color(0xFFC13584),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        )
+            : null,
+        color: isSeen ? Colors.grey.shade400 : null,
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(2),
+        decoration: const BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white,
+        ),
+        child: CircleAvatar(
+          radius: 28,
+          backgroundColor: Colors.grey.shade200,
+          backgroundImage:
+          imageUrl != null && imageUrl!.isNotEmpty
+              ? CachedNetworkImageProvider(imageUrl!)
+              : null,
+          child: imageUrl == null || imageUrl!.isEmpty
+              ? const Icon(
+            Icons.person,
+            size: 28,
+            color: Colors.white70,
+          )
+              : null,
+        ),
+      ),
     );
   }
 }
@@ -1008,6 +1424,107 @@ class PostWidget extends StatelessWidget {
   }
 }
 
+// ---------------------- Double-tap heart overlay (Instagram-style) -----
+
+class _DoubleTapHeartOverlay extends StatefulWidget {
+  final String postId;
+  final Widget child;
+
+  const _DoubleTapHeartOverlay({
+    Key? key,
+    required this.postId,
+    required this.child,
+  }) : super(key: key);
+
+  @override
+  State<_DoubleTapHeartOverlay> createState() => _DoubleTapHeartOverlayState();
+}
+
+class _DoubleTapHeartOverlayState extends State<_DoubleTapHeartOverlay>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scale;
+  late Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _scale = Tween<double>(begin: 0.0, end: 1.2).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: Curves.elasticOut,
+      ),
+    );
+    _opacity = Tween<double>(begin: 0.8, end: 0.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.4, 1.0, curve: Curves.easeOut),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onDoubleTap() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('posts')
+            .doc(widget.postId)
+            .collection('likes')
+            .doc(uid)
+            .set({
+          'userId': uid,
+          'likedAt': FieldValue.serverTimestamp(),
+        });
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    _controller.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onDoubleTap: _onDoubleTap,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          widget.child,
+          AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              if (_controller.value == 0) return const SizedBox.shrink();
+              return IgnorePointer(
+                child: Opacity(
+                  opacity: _opacity.value,
+                  child: Transform.scale(
+                    scale: _scale.value,
+                    child: Icon(
+                      Icons.favorite,
+                      size: 100,
+                      color: kIgLikeRed,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ---------------------- Post Media --------------------------
 
 class _PostMedia extends StatefulWidget {
@@ -1030,20 +1547,27 @@ class _PostMediaState extends State<_PostMedia> {
     final url = (first['url'] ?? '').toString();
 
     if (type == 'video') {
-      return AspectRatio(
-        aspectRatio: 16 / 9,
+      return SizedBox(
+        height: 300,
+        width: double.infinity,
         child: _NetworkVideo(url: url),
       );
     }
 
+
     return ClipRRect(
-      borderRadius: BorderRadius.circular(18),
-      child: Image.network(
-        url,
+      borderRadius: BorderRadius.circular(8),
+      child: CachedNetworkImage(
+        imageUrl: url,
         height: 300,
         width: double.infinity,
         fit: BoxFit.cover,
-        errorBuilder: (context, _, __) => Container(
+        placeholder: (_, __) => Container(
+          height: 300,
+          color: Colors.grey.shade200,
+          child: const Center(child: CircularProgressIndicator()),
+        ),
+        errorWidget: (_, __, ___) => Container(
           height: 300,
           color: Colors.grey[300],
           child: const Center(child: Icon(Icons.broken_image)),
@@ -1064,15 +1588,17 @@ class _NetworkVideo extends StatefulWidget {
 
 class _NetworkVideoState extends State<_NetworkVideo> {
   late final VideoPlayerController _controller;
-  bool _initialized = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.network(widget.url)
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url))
       ..initialize().then((_) {
         if (!mounted) return;
-        setState(() => _initialized = true);
+        _controller
+          ..setLooping(true)
+          ..play();
+        setState(() {});
       });
   }
 
@@ -1084,41 +1610,48 @@ class _NetworkVideoState extends State<_NetworkVideo> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_initialized) {
+    if (!_controller.value.isInitialized) {
       return Container(
+        height: 300,
         color: Colors.black12,
         child: const Center(child: CircularProgressIndicator()),
       );
     }
 
     return Stack(
-      alignment: Alignment.bottomCenter,
+      alignment: Alignment.center,
       children: [
-        VideoPlayer(_controller),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton(
-              icon: Icon(
-                _controller.value.isPlaying
-                    ? Icons.pause
-                    : Icons.play_arrow,
-                color: Colors.white,
-              ),
-              onPressed: () {
-                setState(() {
-                  _controller.value.isPlaying
-                      ? _controller.pause()
-                      : _controller.play();
-                });
-              },
+        SizedBox.expand(
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: _controller.value.size.width,
+              height: _controller.value.size.height,
+              child: VideoPlayer(_controller),
             ),
-          ],
+          ),
+        ),
+        IconButton(
+          icon: Icon(
+            _controller.value.isPlaying
+                ? Icons.pause_circle_filled
+                : Icons.play_circle_filled,
+            color: Colors.white,
+            size: 48,
+          ),
+          onPressed: () {
+            setState(() {
+              _controller.value.isPlaying
+                  ? _controller.pause()
+                  : _controller.play();
+            });
+          },
         ),
       ],
     );
   }
 }
+
 
 // ---------------------- Post Actions ------------------------
 
@@ -1209,34 +1742,39 @@ class _PostActionsState extends State<_PostActions> {
                 return IconButton(
                   icon: Icon(
                     isLiked ? Icons.favorite : Icons.favorite_border,
-                    color: isLiked ? Colors.red : Colors.black,
+                    color: isLiked ? kIgLikeRed : kIgPrimaryText,
+                    size: 28,
                   ),
                   onPressed: _toggleLike,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 );
               },
             ),
             IconButton(
-              icon: const Icon(Icons.message_outlined),
+              icon: Icon(Icons.chat_bubble_outline, size: 26, color: kIgPrimaryText),
               onPressed: _showComments,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             ),
             IconButton(
-              icon: const Icon(Icons.share),
+              icon: Icon(Icons.send_outlined, size: 26, color: kIgPrimaryText),
               onPressed: () {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                       content: Text('Share functionality coming soon!')),
                 );
               },
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             ),
             const Spacer(),
             IconButton(
-              icon: const Icon(Icons.bookmark_border),
+              icon: Icon(Icons.bookmark_border, size: 26, color: kIgPrimaryText),
               onPressed: () {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                       content: Text('Save functionality coming soon!')),
                 );
               },
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             ),
           ],
         ),
@@ -1247,43 +1785,73 @@ class _PostActionsState extends State<_PostActions> {
               .collection('likes')
               .snapshots(),
           builder: (context, likeCountSnapshot) {
-            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
+            return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: _currentUserId != null
+                  ? FirebaseFirestore.instance
                   .collection('posts')
                   .doc(widget.postId)
-                  .collection('comments')
-                  .snapshots(),
-              builder: (context, commentCountSnapshot) {
-                final likeCount =
-                    likeCountSnapshot.data?.docs.length ?? 0;
-                final commentCount =
-                    commentCountSnapshot.data?.docs.length ?? 0;
-
-                if (likeCount == 0 && commentCount == 0) {
-                  return const SizedBox.shrink();
-                }
-
-                return Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16.0, vertical: 4),
-                  child: Row(
-                    children: [
-                      if (likeCount > 0)
-                        Text(
-                          '$likeCount ${likeCount == 1 ? 'like' : 'likes'}',
-                          style:
-                          const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                      if (likeCount > 0 && commentCount > 0)
-                        const SizedBox(width: 16),
-                      if (commentCount > 0)
-                        Text(
-                          '$commentCount ${commentCount == 1 ? 'comment' : 'comments'}',
-                          style:
-                          const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                    ],
-                  ),
+                  .collection('likes')
+                  .doc(_currentUserId!)
+                  .snapshots()
+                  : const Stream.empty(),
+              builder: (context, myLikeSnapshot) {
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: FirebaseFirestore.instance
+                      .collection('posts')
+                      .doc(widget.postId)
+                      .collection('comments')
+                      .snapshots(),
+                  builder: (context, commentCountSnapshot) {
+                    final likeCount =
+                        likeCountSnapshot.data?.docs.length ?? 0;
+                    final commentCount =
+                        commentCountSnapshot.data?.docs.length ?? 0;
+                    final isLiked =
+                        myLikeSnapshot.hasData && myLikeSnapshot.data!.exists;
+                    final textTheme = Theme.of(context).textTheme;
+                    String likeText;
+                    if (likeCount == 0) {
+                      likeText = 'Be the first to like this';
+                    } else if (isLiked && likeCount == 1) {
+                      likeText = 'Liked by you';
+                    } else if (isLiked && likeCount >= 2) {
+                      likeText = 'Liked by you and ${likeCount - 1} others';
+                    } else if (likeCount == 1) {
+                      likeText = 'Liked by 1 person';
+                    } else {
+                      likeText = 'Liked by $likeCount people';
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16.0, vertical: 8.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            likeText,
+                            style: textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: kIgPrimaryText,
+                              fontSize: 14,
+                            ),
+                          ),
+                          if (commentCount > 0) ...[
+                            const SizedBox(height: 4),
+                            GestureDetector(
+                              onTap: _showComments,
+                              child: Text(
+                                'View all $commentCount ${commentCount == 1 ? 'comment' : 'comments'}',
+                                style: textTheme.bodyMedium?.copyWith(
+                                  color: kIgSecondaryText,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  },
                 );
               },
             );

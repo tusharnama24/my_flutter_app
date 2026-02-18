@@ -6,11 +6,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 
+import 'package:halo/app_theme_mode.dart';
+
 // HALO Theme Colors
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
 const Color kBackgroundColor = Color(0xFFF4F1FB); // Soft lavender background
 const Color kChipBg = Color(0xFFEDE7F6); // Light lavender chip background
+
+/// App version; keep in sync with pubspec.yaml version.
+const String kAppVersion = '1.0.0';
 
 class SettingsPage extends StatefulWidget {
   @override
@@ -53,21 +58,21 @@ class _SettingsPageState extends State<SettingsPage> {
           _notificationsEnabled = data['notificationsEnabled'] ?? true;
           _emailNotifications = data['emailNotifications'] ?? true;
           _pushNotifications = data['pushNotifications'] ?? true;
-          _darkMode = data['darkMode'] ?? false;
           _showOnlineStatus = data['showOnlineStatus'] ?? true;
           _allowTagging = data['allowTagging'] ?? true;
           _allowComments = data['allowComments'] ?? true;
           _showActivityStatus = data['showActivityStatus'] ?? true;
           _twoFactorEnabled = data['twoFactorEnabled'] ?? false;
+          // Dark mode: prefs is source of truth so theme matches what user last chose on this device
+          _darkMode = prefs.getBool('darkMode') ?? (data['darkMode'] ?? false);
+        });
+      } else {
+        setState(() {
+          _darkMode = prefs.getBool('darkMode') ?? false;
         });
       }
-
-      // Load local preferences
-      setState(() {
-        _darkMode = prefs.getBool('darkMode') ?? false;
-      });
     } catch (e) {
-      print('Error loading settings: $e');
+      debugPrint('Error loading settings: $e');
     }
   }
 
@@ -75,7 +80,8 @@ class _SettingsPageState extends State<SettingsPage> {
     if (currentUser == null) return;
 
     try {
-      await _firestore.collection('users').doc(currentUser!.uid).update({
+      // set(merge: true) so new/social-login users don't crash (update() requires doc to exist)
+      await _firestore.collection('users').doc(currentUser!.uid).set({
         'notificationsEnabled': _notificationsEnabled,
         'emailNotifications': _emailNotifications,
         'pushNotifications': _pushNotifications,
@@ -85,19 +91,28 @@ class _SettingsPageState extends State<SettingsPage> {
         'allowComments': _allowComments,
         'showActivityStatus': _showActivityStatus,
         'twoFactorEnabled': _twoFactorEnabled,
-      });
+      }, SetOptions(merge: true));
 
-      // Save local preferences
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('darkMode', _darkMode);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Settings saved successfully!')),
-      );
+      // Apply theme immediately so UI switches light/dark
+      setAppThemeMode(_darkMode);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Settings saved successfully!')),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error saving settings: $e')),
-      );
+      debugPrint('Error saving settings: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Something went wrong. Please try again.'),
+          ),
+        );
+      }
     }
   }
 
@@ -192,8 +207,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 },
               ),
               _buildSettingsItem(
-                'Two-Factor Authentication',
-                'Add extra security to your account',
+                'Two-Factor Authentication (preference)',
+                'Not real 2FA — saves a preference only',
                 Icons.security,
                     () {
                   _showTwoFactorAuth();
@@ -567,14 +582,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 setDialogState(() => isLoading = true);
 
                 try {
-                  // Re-authenticate user
                   final credential = EmailAuthProvider.credential(
                     email: currentUser!.email!,
                     password: oldPasswordController.text,
                   );
                   await currentUser!.reauthenticateWithCredential(credential);
-
-                  // Update password
                   await currentUser!.updatePassword(newPasswordController.text);
 
                   if (context.mounted) {
@@ -604,26 +616,23 @@ class _SettingsPageState extends State<SettingsPage> {
                   setDialogState(() => isLoading = false);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error: $e')),
+                      const SnackBar(
+                        content: Text('Something went wrong. Please try again.'),
+                      ),
                     );
                   }
                 }
               },
-              child: isLoading
-                  ? SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-                  : Text(
-                      'Change Password',
-                      style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-                    ),
+              child: Text('Save'),
             ),
           ],
         ),
       ),
-    );
+    ).then((_) {
+      oldPasswordController.dispose();
+      newPasswordController.dispose();
+      confirmPasswordController.dispose();
+    });
   }
 
   void _showAccountInfo() {
@@ -720,7 +729,7 @@ class _SettingsPageState extends State<SettingsPage> {
             borderRadius: BorderRadius.circular(20),
           ),
           title: Text(
-            'Two-Factor Authentication',
+            'Two-Factor Authentication (preference)',
             style: GoogleFonts.poppins(
               fontWeight: FontWeight.w600,
               color: kSecondaryColor,
@@ -730,8 +739,20 @@ class _SettingsPageState extends State<SettingsPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Container(
+                padding: EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'This is not real 2FA. Your account is not protected by SMS or an authenticator app. This toggle only saves a preference.',
+                  style: GoogleFonts.poppins(fontSize: 13, color: Colors.orange.shade900),
+                ),
+              ),
+              SizedBox(height: 12),
               Text(
-                'Two-factor authentication adds an extra layer of security to your account.',
+                'Real two-factor authentication would require backend setup with SMS or authenticator app integration.',
                 style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[700]),
               ),
               SizedBox(height: 16),
@@ -800,19 +821,32 @@ class _SettingsPageState extends State<SettingsPage> {
                   await _firestore
                       .collection('users')
                       .doc(currentUser!.uid)
-                      .update({'twoFactorEnabled': _twoFactorEnabled});
+                      .set(
+                        {'twoFactorEnabled': _twoFactorEnabled},
+                        SetOptions(merge: true),
+                      );
                   setState(() {});
-                  Navigator.pop(context);
-                  Fluttertoast.showToast(
-                    msg: _twoFactorEnabled
-                        ? 'Two-factor authentication enabled'
-                        : 'Two-factor authentication disabled',
-                    toastLength: Toast.LENGTH_SHORT,
-                  );
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          _twoFactorEnabled
+                              ? 'Preference saved (not real 2FA).'
+                              : 'Preference saved.',
+                        ),
+                      ),
+                    );
+                    Navigator.pop(context);
+                  }
                 } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Error: $e')),
-                  );
+                  debugPrint('Two-factor preference save error: $e');
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Something went wrong. Please try again.'),
+                      ),
+                    );
+                  }
                 }
               },
               child: Text('Save'),
@@ -956,10 +990,15 @@ class _SettingsPageState extends State<SettingsPage> {
                     );
                   }
                 } catch (e) {
+                  debugPrint('Contact Us submit error: $e');
                   setDialogState(() => isLoading = false);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error: $e')),
+                      const SnackBar(
+                        content: Text(
+                          'Something went wrong. Please try again.',
+                        ),
+                      ),
                     );
                   }
                 }
@@ -999,7 +1038,7 @@ class _SettingsPageState extends State<SettingsPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Version: 1.0.0'),
+            Text('Version: $kAppVersion'),
             SizedBox(height: 8),
             Text('Build: 2024.01.01'),
             SizedBox(height: 8),
@@ -1047,9 +1086,12 @@ class _SettingsPageState extends State<SettingsPage> {
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pop(context, 'logout');
+            onPressed: () async {
+              Navigator.pop(context); // close dialog
+              await _auth.signOut(); // ensure Firebase user is signed out
+              if (context.mounted) {
+                Navigator.pop(context, 'logout');
+              }
             },
             child: Text(
               'Logout',
@@ -1091,19 +1133,31 @@ class _BlockedUsersPageState extends State<BlockedUsersPage> {
           .collection('blockedUsers');
 
       final snapshot = await blockedRef.get();
-      final List<Map<String, dynamic>> blockedList = [];
+      final blockedIds = snapshot.docs.map((d) => d.id).toList();
+      final blockedAtMap = {
+        for (var d in snapshot.docs) d.id: d.data()['blockedAt']
+      };
 
-      for (var doc in snapshot.docs) {
-        final blockedUserId = doc.id;
-        final userDoc = await _firestore.collection('users').doc(blockedUserId).get();
-        if (userDoc.exists) {
-          final userData = userDoc.data()!;
+      final List<Map<String, dynamic>> blockedList = [];
+      const int batchSize = 30; // Firestore 'in' query limit
+      for (var i = 0; i < blockedIds.length; i += batchSize) {
+        final batch = blockedIds
+            .skip(i)
+            .take(batchSize)
+            .toList();
+        if (batch.isEmpty) break;
+        final usersSnap = await _firestore
+            .collection('users')
+            .where(FieldPath.documentId, whereIn: batch)
+            .get();
+        for (var userDoc in usersSnap.docs) {
+          final userData = userDoc.data();
           blockedList.add({
-            'userId': blockedUserId,
+            'userId': userDoc.id,
             'name': userData['name'] ?? 'Unknown User',
             'username': userData['username'] ?? '',
             'profilePic': userData['profilePic'],
-            'blockedAt': doc.data()['blockedAt'],
+            'blockedAt': blockedAtMap[userDoc.id],
           });
         }
       }
@@ -1113,7 +1167,7 @@ class _BlockedUsersPageState extends State<BlockedUsersPage> {
         _isLoading = false;
       });
     } catch (e) {
-      print('Error loading blocked users: $e');
+      debugPrint('Error loading blocked users: $e');
       setState(() => _isLoading = false);
     }
   }
@@ -1184,9 +1238,14 @@ class _BlockedUsersPageState extends State<BlockedUsersPage> {
         toastLength: Toast.LENGTH_SHORT,
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error unblocking user: $e')),
-      );
+      debugPrint('Error unblocking user: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Something went wrong. Please try again.'),
+          ),
+        );
+      }
     }
   }
 

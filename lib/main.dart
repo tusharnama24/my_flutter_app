@@ -1,18 +1,16 @@
 import 'package:halo/Bottom Pages/HomePage.dart';
 import 'package:halo/Category/categorypage.dart';
 import 'package:halo/forgotpasswordpage.dart';
-import 'package:halo/logoscreen.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:flutter/cupertino.dart';
 import 'firebase_options.dart';
 import 'package:halo/widgets/google_sign_in_button.dart';
-import 'package:halo/chat/chat_list_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'interest_selection_page.dart';
+import 'app_theme_mode.dart';
 
 // ----------------- HALO THEME CONSTANTS -----------------
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -26,6 +24,7 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await loadAppThemeMode();
   runApp(MyApp());
 }
 
@@ -37,8 +36,11 @@ class MyApp extends StatelessWidget {
     final baseLight = ThemeData.light();
     final baseDark = ThemeData.dark();
 
-    return MaterialApp(
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: appThemeModeNotifier,
+      builder: (context, themeMode, _) => MaterialApp(
       debugShowCheckedModeBanner: false,
+      themeMode: themeMode,
       theme: baseLight.copyWith(
         colorScheme: ColorScheme.fromSeed(
           seedColor: kPrimaryColor,
@@ -46,6 +48,17 @@ class MyApp extends StatelessWidget {
         ),
         scaffoldBackgroundColor: kLightBackground,
         textTheme: GoogleFonts.poppinsTextTheme(baseLight.textTheme),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          hintStyle: GoogleFonts.poppins(color: Colors.black54),
+          labelStyle: GoogleFonts.poppins(color: Colors.black87),
+        ),
+        textSelectionTheme: const TextSelectionThemeData(
+          cursorColor: kSecondaryColor,
+          selectionColor: kPrimaryColor,
+          selectionHandleColor: kSecondaryColor,
+        ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: kPrimaryColor,
@@ -83,6 +96,17 @@ class MyApp extends StatelessWidget {
           bodyColor: Colors.white,
           displayColor: Colors.white,
         ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.grey.shade900,
+          hintStyle: GoogleFonts.poppins(color: Colors.white70),
+          labelStyle: GoogleFonts.poppins(color: Colors.white),
+        ),
+        textSelectionTheme: const TextSelectionThemeData(
+          cursorColor: kPrimaryColor,
+          selectionColor: kPrimaryColor,
+          selectionHandleColor: kPrimaryColor,
+        ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: kPrimaryColor,
@@ -111,8 +135,64 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      themeMode: ThemeMode.system,
-      home: LogoScreen(), // LogoScreen should later navigate to LoginPage()
+      home: const AuthGate(), // LogoScreen should later navigate to LoginPage()
+    ),
+    );
+  }
+}
+// ===================== AUTH GATE =====================
+// 🔑 This fixes login being asked every time
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (snapshot.hasData) {
+          return const StartupRouter();
+        }
+
+        return LoginPage();
+      },
+    );
+  }
+}
+
+// ===================== STARTUP ROUTER =====================
+// Decides Home vs Interest on reopen
+
+class StartupRouter extends StatelessWidget {
+  const StartupRouter({super.key});
+
+  Future<bool> _interestsCompleted() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('interests_completed') ?? false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<bool>(
+      future: _interestsCompleted(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        return snapshot.data!
+            ? HomePage()
+            : const InterestSelectionPage();
+      },
     );
   }
 }
@@ -397,11 +477,11 @@ Last updated: ${DateTime.now().year}''',
       labelText: label,
       hintText: hint,
       labelStyle: textTheme.labelMedium?.copyWith(
-        color: Colors.grey.shade300,
+        color: Colors.black87,
         fontWeight: FontWeight.w500,
       ),
       hintStyle: textTheme.bodySmall?.copyWith(
-        color: Colors.grey.shade500,
+        color: Colors.black54,
       ),
       filled: true,
       fillColor: Colors.white.withOpacity(0.05),

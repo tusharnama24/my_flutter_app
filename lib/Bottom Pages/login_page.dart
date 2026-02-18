@@ -137,7 +137,7 @@ class _LoginPageState extends State<LoginPage> {
     return InputDecoration(
       hintText: hintText,
       hintStyle: textTheme.bodyMedium?.copyWith(
-        color: Colors.grey.shade500,
+        color: Colors.black54,
       ),
       filled: true,
       fillColor: const Color(0xFFF9F6FF),
@@ -300,6 +300,7 @@ class _LoginPageState extends State<LoginPage> {
                               controller: _loginIdController,
                               keyboardType: TextInputType.emailAddress,
                               textInputAction: TextInputAction.next,
+                              style: const TextStyle(color: Colors.black),
                               decoration: _inputDecoration(
                                 hintText: "Username / Email / Phone",
                                 prefixIcon: const Icon(
@@ -329,6 +330,7 @@ class _LoginPageState extends State<LoginPage> {
                               controller: _passwordController,
                               obscureText: _obscurePassword,
                               textInputAction: TextInputAction.done,
+                              style: const TextStyle(color: Colors.black),
                               decoration: _inputDecoration(
                                 hintText: "Enter your password or OTP",
                                 prefixIcon: const Icon(

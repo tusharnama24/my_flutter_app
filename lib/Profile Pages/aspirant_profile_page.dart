@@ -24,6 +24,7 @@ import '../editprofilepage.dart';
 import '../main.dart'; // LoginPage
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
+import 'package:halo/utils/search_utils.dart';
 import 'edit_profile_sections.dart'; // Edit pages for profile sections
 
 // ===================================================================
@@ -180,7 +181,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           return;
         }
 
-        _fullName = (data['name'] ?? '') as String;
+        _fullName = (data['full_name'] ?? '') as String;
         _username = (data['username'] ?? '') as String;
         _fitnessTag = (data['fitnessTag'] ?? 'Explorer on Halo') as String;
         _city = (data['city'] ?? '') as String;
@@ -498,12 +499,28 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   .child(fileName);
               final snap = await ref.putFile(File(image.path));
               final url = await snap.ref.getDownloadURL();
+              final uid = FirebaseAuth.instance.currentUser!.uid;
+
+// 🔹 get accountType from users collection
+              final userDoc = await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(uid)
+                  .get();
+
+              final accountType =
+                  userDoc.data()?['accountType']?.toString().toLowerCase() ?? 'aspirant';
+
+// 🔹 now save post (image URL from upload above)
               await FirebaseFirestore.instance.collection('posts').add({
-                'imageUrl': url,
+                'userId': uid,
+                'accountType': accountType,
                 'caption': caption,
-                'userId': _currentUser!.uid,
+                'tags': [],
+                'imageUrl': url,
                 'timestamp': FieldValue.serverTimestamp(),
+                'createdAt': FieldValue.serverTimestamp(),
               });
+
               await _firestore
                   .collection('users')
                   .doc(_currentUser!.uid)
@@ -541,10 +558,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
     if (updatedData != null) {
       try {
+        final username = updatedData['username']?.toString().trim() ?? '';
+        final name = updatedData['name']?.toString().trim() ?? '';
         await _firestore.collection('users').doc(_currentUser!.uid).update({
-          'username': updatedData['username'],
-          'name': updatedData['name'],
+          'username': username,
+          'name': name,
           'bio': updatedData['bio'],
+          'searchTerms': buildSearchTerms(name: name, username: username),
         });
         await _loadProfileData();
       } catch (e) {
@@ -2605,6 +2625,20 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   // ===================================================================
   //  POSTS GRID
   // ===================================================================
+  /// Resolves post image URL from AddPostPage format (images/media) or legacy (imageUrl).
+  static String? _getPostImageUrl(Map<String, dynamic> data) {
+    final imageUrl = data['imageUrl']?.toString();
+    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
+    final images = data['images'];
+    if (images is List && images.isNotEmpty) return images.first?.toString();
+    final media = data['media'];
+    if (media is List && media.isNotEmpty) {
+      final first = media.first;
+      if (first is Map && first['url'] != null) return first['url']?.toString();
+    }
+    return null;
+  }
+
   Widget _buildRecentPostsGrid() {
     // Private account handling (Instagram style)
     if (_isPrivate && !_isFollowing && !_isOwnProfile) {
@@ -2621,8 +2655,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     final postsQuery = FirebaseFirestore.instance
         .collection('posts')
         .where('userId', isEqualTo: userId)
-        .orderBy('timestamp', descending: true)
-        .limit(12);
+        .limit(30);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
@@ -2637,7 +2670,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             ),
           ),
           const SizedBox(height: 12),
-          StreamBuilder<QuerySnapshot>(
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: postsQuery.snapshots(),
             builder: (context, snap) {
               if (snap.connectionState == ConnectionState.waiting) {
@@ -2648,7 +2681,18 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   ),
                 );
               }
-              final docs = snap.data?.docs ?? [];
+              final allDocs = snap.data?.docs ?? [];
+              final sortedDocs = List.from(allDocs)..sort((a, b) {
+                final aData = a.data() as Map<String, dynamic>?;
+                final bData = b.data() as Map<String, dynamic>?;
+                final aTs = aData?['timestamp'] ?? aData?['createdAt'];
+                final bTs = bData?['timestamp'] ?? bData?['createdAt'];
+                if (aTs == null) return 1;
+                if (bTs == null) return -1;
+                if (aTs is Timestamp && bTs is Timestamp) return bTs.compareTo(aTs);
+                return 0;
+              });
+              final docs = sortedDocs.take(12).toList();
               if (docs.isEmpty) {
                 return Padding(
                   padding: const EdgeInsets.only(top: 8.0),
@@ -2671,7 +2715,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 itemBuilder: (context, idx) {
                   final doc = docs[idx];
                   final data = doc.data()! as Map<String, dynamic>;
-                  final imageUrl = data['imageUrl'] as String?;
+                  final imageUrl = _getPostImageUrl(data);
                   return GestureDetector(
                     onTap: () => Navigator.push(
                       context,
@@ -2687,12 +2731,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                           color: Colors.grey[200],
                         ),
                         clipBehavior: Clip.hardEdge,
-                        child: imageUrl != null
+                        child: imageUrl != null && imageUrl.isNotEmpty
                             ? Image.network(
                           imageUrl,
                           fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.image, color: Colors.grey)),
                         )
-                            : const SizedBox.shrink(),
+                            : const Center(child: Icon(Icons.image, color: Colors.grey)),
                       ),
                     ),
                   );
@@ -2854,6 +2899,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                                       child: Text(
                                         _fullName.isNotEmpty
                                             ? _fullName
+                                            : _username.isNotEmpty
+                                            ? '@$_username'
                                             : 'No name',
                                         style: GoogleFonts.poppins(
                                           fontSize: 20,
@@ -2865,7 +2912,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                                     ),
                                     const SizedBox(width: 8),
                                     // Online status green dot
-                                    StreamBuilder<DocumentSnapshot>(
+                                    StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                                       stream: _firestore
                                           .collection('users')
                                           .doc(widget.profileUserId)

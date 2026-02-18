@@ -18,6 +18,7 @@ import '../../editprofilepage.dart';
 import '../../main.dart'; // LoginPage
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
+import 'package:halo/utils/search_utils.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
@@ -213,7 +214,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         debugPrint('🔍 Guru Profile Page - Is Own Profile: $_isOwnProfile');
         // ---------------------------------------------------------
 
-        _fullName = (data['name'] ?? '') as String;
+        // Guru signup uses full_name; also support name / business_name
+        final nameRaw = data['full_name'] ?? data['name'] ?? data['business_name'] ?? '';
+        _fullName = (nameRaw is String ? nameRaw : nameRaw.toString()).trim();
         _username = (data['username'] ?? '') as String;
         _primaryCategory = (data['primaryCategory'] ?? '') as String;
         _city = (data['city'] ?? '') as String;
@@ -567,31 +570,18 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
         // Load reviews for first tab
         try {
-          // Try reviews collection first
-          QuerySnapshot<Map<String, dynamic>>? reviewsSnapshot;
-          try {
-            reviewsSnapshot = await _firestore
-                .collection('reviews')
-                .where('guruId', isEqualTo: widget.profileUserId)
-                .orderBy('createdAt', descending: true)
-                .limit(2)
-                .get();
-          } catch (_) {
-            // If query fails (no index), try without orderBy
-            try {
-              reviewsSnapshot = await _firestore
-                  .collection('reviews')
-                  .where('guruId', isEqualTo: widget.profileUserId)
-                  .limit(2)
-                  .get();
-            } catch (_) {
-              reviewsSnapshot = null;
-            }
-          }
+          final QuerySnapshot<Map<String, dynamic>> reviewsSnapshot =
+          await _firestore
+              .collection('reviews')
+              .where('guruId', isEqualTo: widget.profileUserId)
+              .orderBy('createdAt', descending: true)
+              .orderBy(FieldPath.documentId, descending: true)
+              .limit(2)
+              .get();
 
-          if (reviewsSnapshot != null && reviewsSnapshot.docs.isNotEmpty) {
+          if (reviewsSnapshot.docs.isNotEmpty) {
             _reviews = reviewsSnapshot.docs.map((doc) {
-              final d = doc.data() as Map<String, dynamic>;
+              final d = doc.data();
               return <String, dynamic>{
                 'id': doc.id,
                 'name': d['userName'] ?? d['name'] ?? 'User',
@@ -602,27 +592,13 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               };
             }).toList();
           } else {
-            // Fallback to user document reviews array
-            final reviewsRaw = data['reviews'];
-            if (reviewsRaw is List && reviewsRaw.isNotEmpty) {
-              _reviews = reviewsRaw
-                  .take(2)
-                  .map((e) => Map<String, dynamic>.from(e as Map))
-                  .toList();
-            } else {
-              _reviews = [];
-            }
+            _reviews = [];
           }
         } catch (e) {
           debugPrint('Error loading reviews: $e');
-          final reviewsRaw = data['reviews'];
-          _reviews = reviewsRaw is List && reviewsRaw.isNotEmpty
-              ? reviewsRaw
-                  .take(2)
-                  .map((e) => Map<String, dynamic>.from(e as Map))
-                  .toList()
-              : [];
+          _reviews = [];
         }
+
 
         // Load programs/services (from classes or popularProducts)
         try {
@@ -1233,10 +1209,13 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     );
     if (updatedData != null) {
       try {
+        final username = updatedData['username']?.toString().trim() ?? '';
+        final name = updatedData['name']?.toString().trim() ?? '';
         await _firestore.collection('users').doc(_currentUser!.uid).update({
-          'username': updatedData['username'],
-          'name': updatedData['name'],
+          'username': username,
+          'name': name,
           'bio': updatedData['bio'],
+          'searchTerms': buildSearchTerms(name: name, username: username),
         });
         await _loadProfileData();
       } catch (e) {
@@ -1543,7 +1522,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                         children: [
                           Expanded(
                             child: Text(
-                              _fullName.isNotEmpty ? _fullName : 'No name',
+                              _fullName.isNotEmpty ? _fullName : (_username.isNotEmpty ? '@$_username' : 'Guru'),
                               style: GoogleFonts.poppins(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
@@ -2225,14 +2204,18 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        specialty,
-                        style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.black87,
+                      Expanded(
+                        child: Text(
+                          specialty,
+                          style: GoogleFonts.poppins(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      const SizedBox(width: 8),
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: List.generate(5, (i) {
@@ -2438,26 +2421,33 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Popular Products',
-                        style: GoogleFonts.poppins(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Popular Products',
+                          style: GoogleFonts.poppins(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                      Text(
-                        'Check out my recommended fitness gear',
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: Colors.black54,
+                        Text(
+                          'Check out my recommended fitness gear',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.black54,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
+                  const SizedBox(width: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
@@ -2854,6 +2844,20 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     }
   }
 
+  /// Resolves post image URL from AddPostPage format (images/media) or legacy (imageUrl).
+  static String? _getPostImageUrl(Map<String, dynamic> data) {
+    final imageUrl = data['imageUrl']?.toString();
+    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
+    final images = data['images'];
+    if (images is List && images.isNotEmpty) return images.first?.toString();
+    final media = data['media'];
+    if (media is List && media.isNotEmpty) {
+      final first = media.first;
+      if (first is Map && first['url'] != null) return first['url']?.toString();
+    }
+    return null;
+  }
+
   Widget _buildRecentPostsSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2939,7 +2943,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 }
               });
             final docs = sortedDocs.take(9).toList();
-            
+
             if (docs.isEmpty) {
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20.0),
@@ -2972,7 +2976,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               child: Column(
                 children: docs.take(2).map((doc) {
                   final data = doc.data() as Map<String, dynamic>;
-                  final imageUrl = data['imageUrl']?.toString() ?? '';
+                  final imageUrl = _getPostImageUrl(data);
                   final caption = data['caption']?.toString() ?? '';
                   final timestamp = data['timestamp'] ?? data['createdAt'];
                   
@@ -3050,7 +3054,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                           ),
                         ),
                         // Post Image
-                        if (imageUrl.isNotEmpty)
+                        if (imageUrl != null && imageUrl.isNotEmpty)
                           Container(
                             width: double.infinity,
                             height: 300,
@@ -3059,7 +3063,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                               imageUrl,
                               fit: BoxFit.cover,
                               errorBuilder: (_, __, ___) => const Center(
-                                child: Text('Image-url', style: TextStyle(color: Colors.grey)),
+                                child: Icon(Icons.image, color: Colors.grey),
                               ),
                             ),
                           )
@@ -3069,7 +3073,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                             height: 300,
                             color: Colors.grey[200],
                             child: const Center(
-                              child: Text('Image-url', style: TextStyle(color: Colors.grey)),
+                              child: Icon(Icons.image, color: Colors.grey),
                             ),
                           ),
                         // Caption and Tags
@@ -3135,12 +3139,15 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Reviews & Ratings',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+              Expanded(
+                child: Text(
+                  'Reviews & Ratings',
+                  style: GoogleFonts.poppins(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (!_isOwnProfile)

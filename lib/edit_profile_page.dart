@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:halo/utils/search_utils.dart';
 
 class EditProfilePage extends StatefulWidget {
   final String initialUsername;
@@ -73,6 +74,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
         'gender': _genderController.text.trim(),
         'professiontype': _professionTypeController.text.trim(),
       };
+      updatedData['searchTerms'] = buildSearchTerms(
+        name: updatedData['name']?.toString(),
+        username: updatedData['username']?.toString(),
+      );
 
       await _firestore.collection('users').doc(user.uid).update(updatedData);
       Fluttertoast.showToast(msg: 'Profile updated successfully');
@@ -116,9 +121,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
               SizedBox(height: 8),
               TextFormField(
                 controller: _usernameController,
+                style: const TextStyle(color: Colors.black),
                 decoration: InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'Enter your username',
+                  hintStyle: const TextStyle(color: Colors.black54),
+                  labelStyle: const TextStyle(color: Colors.black87),
                 ),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
@@ -135,9 +143,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
               SizedBox(height: 8),
               TextFormField(
                 controller: _nameController,
+                style: const TextStyle(color: Colors.black),
                 decoration: InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'Enter your name',
+                  hintStyle: const TextStyle(color: Colors.black54),
+                  labelStyle: const TextStyle(color: Colors.black87),
                 ),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
@@ -154,9 +165,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
               SizedBox(height: 8),
               TextFormField(
                 controller: _bioController,
+                style: const TextStyle(color: Colors.black),
                 decoration: InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'Enter your bio',
+                  hintStyle: const TextStyle(color: Colors.black54),
+                  labelStyle: const TextStyle(color: Colors.black87),
                 ),
                 maxLines: 3,
                 validator: (value) {
@@ -174,9 +188,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
               SizedBox(height: 8),
               TextFormField(
                 controller: _genderController,
+                style: const TextStyle(color: Colors.black),
                 decoration: InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'Enter your gender',
+                  hintStyle: const TextStyle(color: Colors.black54),
+                  labelStyle: const TextStyle(color: Colors.black87),
                 ),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
@@ -193,9 +210,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
               SizedBox(height: 8),
               TextFormField(
                 controller: _professionTypeController,
+                style: const TextStyle(color: Colors.black),
                 decoration: InputDecoration(
                   border: OutlineInputBorder(),
                   hintText: 'Enter your profession type',
+                  hintStyle: const TextStyle(color: Colors.black54),
+                  labelStyle: const TextStyle(color: Colors.black87),
                 ),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {

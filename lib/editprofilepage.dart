@@ -5,6 +5,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'dart:io';
 
+import 'package:halo/utils/search_utils.dart';
+
 void saveProfileData({
   required String uid,
   required String name,
@@ -15,6 +17,7 @@ void saveProfileData({
     'name': name,
     'username': username,
     'bio': bio,
+    'searchTerms': buildSearchTerms(name: name, username: username),
     'createdAt': FieldValue.serverTimestamp(),
   });
 }
@@ -93,14 +96,17 @@ class _EditProfilePageState extends State<EditProfilePage> {
       imageUrl = await _uploadImage(_imageFile!);
     }
 
+    final name = _nameController.text.trim();
+    final username = _usernameController.text.trim();
     await _firestore.collection('users').doc(uid).set({
-      'name': _nameController.text,
-      'username': _usernameController.text,
+      'name': name,
+      'username': username,
       'bio': _bioController.text,
       'link': _linkController.text,
       'gender': _gender,
       'music': _musicController.text,
       'profilePic': imageUrl,
+      'searchTerms': buildSearchTerms(name: name, username: username),
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -166,7 +172,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: TextField(
         controller: controller,
-        decoration: InputDecoration(labelText: label, border: OutlineInputBorder()),
+        style: const TextStyle(color: Colors.black),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(color: Colors.black87),
+          hintStyle: const TextStyle(color: Colors.black54),
+          border: OutlineInputBorder(),
+        ),
       ),
     );
   }
