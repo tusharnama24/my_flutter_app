@@ -2,16 +2,18 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-// ✅ NEW profile imports (same pattern as HomePage)
 import 'package:halo/Profile%20Pages/aspirant_profile_page.dart'
 as aspirant_profile;
 import 'package:halo/Profile%20Pages/guru_profile_page.dart'
 as guru_profile;
 import 'package:halo/Profile%20Pages/wellness_profile_page.dart'
 as wellness_profile;
+import 'package:halo/services/search_service.dart';
+import 'package:halo/utils/search_ranking.dart';
 
 // ------- THEME CONSTANTS (MATCHING YOUR DESIGN SYSTEM) -------
 
@@ -256,11 +258,12 @@ class SearchPage extends StatefulWidget {
   State<SearchPage> createState() => _SearchPageState();
 }
 
-class _SearchPageState extends State<SearchPage> {
+class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateMixin {
   static const _debounceMs = 400;
   static const _minQueryLength = 2;
 
   final TextEditingController _searchController = TextEditingController();
+  final SearchService _searchService = SearchService();
   String _query = '';
   String _debouncedQuery = '';
   Timer? _debounceTimer;
@@ -268,12 +271,22 @@ class _SearchPageState extends State<SearchPage> {
   String? _cachedQueryFor;
   bool _userSearchLoading = false;
   Object? _userSearchError;
-  /// True when last fetch used client-side filter (first 100) instead of prefix query.
   bool _usedFallbackSearch = false;
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>>? _rankedUserDocs;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>>? _rankedPostDocs;
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
 
   @override
   void dispose() {
     _debounceTimer?.cancel();
+    _tabController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -312,74 +325,103 @@ class _SearchPageState extends State<SearchPage> {
     _fetchUsersOnce(_debouncedQuery);
   }
 
-  /// Fetches users: tries server-side prefix query on [searchTerms] first
-  /// (requires Firestore index: collection users, field searchTerms Ascending).
-  /// Falls back to client-side filter on first 100 if index/field missing.
   Future<void> _fetchUsersOnce(String searchQuery) async {
     final searchLower = searchQuery.trim().toLowerCase();
     if (searchLower.isEmpty) return;
-    // Skip if we already have a fresh cache for this exact query (unless refresh was requested).
-    if (_cachedQueryFor == searchQuery && _cachedUserDocs != null && !_userSearchLoading) {
-      return;
-    }
+    if (_cachedQueryFor == searchQuery && _rankedUserDocs != null && !_userSearchLoading) return;
+
     setState(() {
       _userSearchError = null;
       _userSearchLoading = true;
+      _rankedUserDocs = null;
+      _rankedPostDocs = null;
     });
 
-    const limit = 50;
-    List<QueryDocumentSnapshot>? docs;
-    bool usedPrefixQuery = false;
-
-    // 1) Try server-side prefix query (correct & scalable when searchTerms exists + index).
+    SearchUsersResult? userResult;
     try {
-      final prefixSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .orderBy('searchTerms')
-          .startAt([searchLower])
-          .endAt([searchLower + '\uf8ff'])
-          .limit(limit)
-          .get();
-      // If prefix returns 0 docs (e.g. no users have searchTerms yet), use fallback so search still works.
-      if (prefixSnapshot.docs.isNotEmpty) {
-        docs = prefixSnapshot.docs;
-        usedPrefixQuery = true;
+      userResult = await _searchService.searchUsers(searchQuery);
+    } catch (e, stack) {
+      if (kDebugMode) {
+        debugPrint('SearchPage search failed: $e');
+        debugPrint(stack.toString());
       }
-    } catch (_) {
-      // Index or field missing → fall back to client-side.
+      if (!mounted) return;
+      setState(() {
+        _userSearchLoading = false;
+        _userSearchError = e;
+        _cachedUserDocs = null;
+        _cachedQueryFor = null;
+        _rankedUserDocs = null;
+        _rankedPostDocs = null;
+      });
+      return;
     }
 
-    // 2) Fallback: first N docs, filter client-side (limited correctness).
-    if (docs == null) {
-      try {
-        final snapshot = await FirebaseFirestore.instance
-            .collection('users')
-            .limit(100)
-            .get();
-        docs = snapshot.docs;
-      } catch (e, stack) {
-        if (kDebugMode) {
-          debugPrint('SearchPage user fetch failed: $e');
-          debugPrint(stack.toString());
-        }
-        if (!mounted) return;
-        setState(() {
-          _userSearchLoading = false;
-          _userSearchError = e;
-          _cachedUserDocs = null;
-          _cachedQueryFor = null;
-        });
-        return;
-      }
+    final userDocs = userResult!.docs;
+    final postDocs = await _searchService.searchPosts(searchQuery);
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final userIds = userDocs.map((d) => d.id).toList();
+    final relScores = await _searchService.getRelationshipScores(currentUserId, userIds);
+
+    final rankedUsers = <_ScoredUser>[];
+    for (final doc in userDocs) {
+      final data = doc.data();
+      final username = _safeString(data['username']);
+      final name = _safeString(data['name']) != ''
+          ? _safeString(data['name'])
+          : _safeString(data['full_name']) != ''
+              ? _safeString(data['full_name'])
+              : _safeString(data['business_name']);
+      final bio = _safeString(data['bio']);
+      final lastActiveAt = (data['lastActiveAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+      final followersCount = (data['followersCount'] as int?) ?? 0;
+      final rel = relScores[doc.id] ?? 0.0;
+      final score = userSearchScore(
+        username: username,
+        name: name,
+        bio: bio,
+        relationshipScore: rel,
+        followersCount: followersCount,
+        lastActiveAt: lastActiveAt,
+        query: searchQuery,
+      );
+      rankedUsers.add(_ScoredUser(doc: doc, score: score));
     }
+    rankedUsers.sort((a, b) => b.score.compareTo(a.score));
+    final sortedUserDocs = rankedUsers.map((e) => e.doc).toList();
+
+    final rankedPosts = <_ScoredPost>[];
+    for (final doc in postDocs) {
+      final data = doc.data();
+      final caption = _safeString(data['caption']);
+      final tags = _safeStringList(data['tags']);
+      final likes = (data['likesCount'] as int?) ?? 0;
+      final comments = (data['commentsCount'] as int?) ?? 0;
+      final saves = (data['savesCount'] as int?) ?? 0;
+      final createdAt = (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+      final score = postSearchScore(
+        caption: caption,
+        tags: tags,
+        likes: likes,
+        comments: comments,
+        saves: saves,
+        createdAt: createdAt,
+        query: searchQuery,
+      );
+      rankedPosts.add(_ScoredPost(doc: doc, score: score));
+    }
+    rankedPosts.sort((a, b) => b.score.compareTo(a.score));
+    final sortedPostDocs = rankedPosts.map((e) => e.doc).toList();
 
     if (!mounted) return;
     setState(() {
-      _cachedUserDocs = docs;
+      _cachedUserDocs = userDocs;
       _cachedQueryFor = searchQuery;
+      _rankedUserDocs = sortedUserDocs;
+      _rankedPostDocs = sortedPostDocs;
       _userSearchLoading = false;
       _userSearchError = null;
-      _usedFallbackSearch = !usedPrefixQuery;
+      _usedFallbackSearch = !userResult!.usedPrefix;
     });
   }
 
@@ -453,23 +495,11 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
 
-    final docs = _cachedUserDocs ?? [];
-    final searchLower = showQuery.toLowerCase();
-    final filteredUsers = _usedFallbackSearch
-        ? docs.where((doc) {
-            final data = doc.data() as Map<String, dynamic>? ?? {};
-            final username = _safeString(data['username']).toLowerCase();
-            final name = (_safeString(data['name']) != ''
-                    ? _safeString(data['name'])
-                    : _safeString(data['full_name']) != ''
-                        ? _safeString(data['full_name'])
-                        : _safeString(data['business_name']))
-                .toLowerCase();
-            return username.contains(searchLower) || name.contains(searchLower);
-          }).toList()
-        : docs;
+    final userList = _rankedUserDocs ?? [];
+    final postList = _rankedPostDocs ?? [];
+    final hasAny = userList.isNotEmpty || postList.isNotEmpty;
 
-    if (filteredUsers.isEmpty) {
+    if (!hasAny) {
       return Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -477,7 +507,7 @@ class _SearchPageState extends State<SearchPage> {
           borderRadius: BorderRadius.circular(12),
         ),
         child: Text(
-          'No users found matching "$showQuery"',
+          'No users or posts found matching "$showQuery"',
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: Colors.grey.shade600,
               ),
@@ -491,7 +521,7 @@ class _SearchPageState extends State<SearchPage> {
         Row(
           children: [
             Text(
-              'Users (${filteredUsers.length})',
+              'Results',
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
                     fontWeight: FontWeight.w600,
                     color: Colors.grey.shade900,
@@ -517,31 +547,63 @@ class _SearchPageState extends State<SearchPage> {
                 ),
           ),
         ],
-        const SizedBox(height: 12),
-        ...filteredUsers.map((doc) {
-          final data = doc.data() as Map<String, dynamic>? ?? {};
-          final userId = doc.id;
-          final username = _safeString(data['username']);
-          final name = _safeString(data['name']) != ''
-              ? _safeString(data['name'])
-              : _safeString(data['full_name']) != ''
-                  ? _safeString(data['full_name'])
-                  : _safeString(data['business_name']) != ''
-                      ? _safeString(data['business_name'])
-                      : 'Unnamed User';
-          final profilePhoto = data['profilePhoto'];
-          final profilePhotoUrl =
-              profilePhoto is String ? profilePhoto : _safeString(profilePhoto);
-          final accountType = _safeString(data['accountType']).toLowerCase();
-
-          return _UserSearchResultCard(
-            userId: userId,
-            username: username,
-            name: name,
-            profilePhoto: profilePhotoUrl.isEmpty ? null : profilePhotoUrl,
-            accountType: accountType.isEmpty ? 'aspirant' : accountType,
-          );
-        }),
+        const SizedBox(height: 8),
+        TabBar(
+          controller: _tabController,
+          labelColor: kSecondaryColor,
+          unselectedLabelColor: Colors.grey.shade600,
+          tabs: [
+            Tab(text: 'Users (${userList.length})'),
+            Tab(text: 'Posts (${postList.length})'),
+          ],
+        ),
+        SizedBox(
+          height: 420,
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              ListView.builder(
+                shrinkWrap: true,
+                itemCount: userList.length,
+                itemBuilder: (context, index) {
+                  final doc = userList[index];
+                  final data = doc.data();
+                  final userId = doc.id;
+                  final username = _safeString(data['username']);
+                  final name = _safeString(data['name']) != ''
+                      ? _safeString(data['name'])
+                      : _safeString(data['full_name']) != ''
+                          ? _safeString(data['full_name'])
+                          : _safeString(data['business_name']) != ''
+                              ? _safeString(data['business_name'])
+                              : 'Unnamed User';
+                  final profilePhoto = data['profilePhoto'];
+                  final profilePhotoUrl =
+                      profilePhoto is String ? profilePhoto : _safeString(profilePhoto);
+                  final accountType = _safeString(data['accountType']).toLowerCase();
+                  return _UserSearchResultCard(
+                    userId: userId,
+                    username: username,
+                    name: name,
+                    profilePhoto: profilePhotoUrl.isEmpty ? null : profilePhotoUrl,
+                    accountType: accountType.isEmpty ? 'aspirant' : accountType,
+                  );
+                },
+              ),
+              _PostSearchGrid(
+                docs: postList,
+                onTapPost: (postId) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => aspirant_profile.PostDetailsPage(postId: postId),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -725,6 +787,81 @@ class _SearchPageState extends State<SearchPage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ScoredUser {
+  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+  final double score;
+  _ScoredUser({required this.doc, required this.score});
+}
+
+class _ScoredPost {
+  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+  final double score;
+  _ScoredPost({required this.doc, required this.score});
+}
+
+String? _postImageUrl(Map<String, dynamic> data) {
+  final imageUrl = data['imageUrl']?.toString();
+  if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
+  final images = data['images'];
+  if (images is List && images.isNotEmpty) return images.first?.toString();
+  final media = data['media'];
+  if (media is List && media.isNotEmpty) {
+    final first = media.first;
+    if (first is Map && first['url'] != null) return first['url']?.toString();
+  }
+  return null;
+}
+
+class _PostSearchGrid extends StatelessWidget {
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs;
+  final void Function(String postId) onTapPost;
+
+  const _PostSearchGrid({required this.docs, required this.onTapPost});
+
+  @override
+  Widget build(BuildContext context) {
+    if (docs.isEmpty) {
+      return Center(
+        child: Text(
+          'No posts match your search.',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Colors.grey.shade600,
+              ),
+        ),
+      );
+    }
+    return GridView.builder(
+      padding: const EdgeInsets.only(top: 8),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 4,
+        mainAxisSpacing: 4,
+        childAspectRatio: 1,
+      ),
+      itemCount: docs.length,
+      itemBuilder: (context, index) {
+        final doc = docs[index];
+        final data = doc.data();
+        final imageUrl = _postImageUrl(data);
+        return GestureDetector(
+          onTap: () => onTapPost(doc.id),
+          child: Container(
+            color: Colors.grey.shade300,
+            child: imageUrl != null && imageUrl.isNotEmpty
+                ? Image.network(
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.image_not_supported, color: Colors.grey),
+                  )
+                : const Icon(Icons.image, color: Colors.grey),
+          ),
+        );
+      },
     );
   }
 }
@@ -1234,7 +1371,7 @@ Future<List<QueryDocumentSnapshot>> _fetchUsersByCategory(
     try {
       final term = specializationTerm!.trim();
       final snap = await FirebaseFirestore.instance
-          .collection('users')  
+          .collection('users')
           .where('areas_of_specialization', arrayContains: term)
           .get();
       for (final doc in snap.docs) {

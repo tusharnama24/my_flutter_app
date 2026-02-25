@@ -8,7 +8,7 @@ import 'package:image_picker/image_picker.dart';
 class StoryUploadService {
   final ImagePicker _picker = ImagePicker();
 
-  /// Pick image or video and upload as story
+  /// Pick image or video and upload as a story
   Future<void> pickAndUploadStory({required bool isVideo}) async {
     final user = FirebaseAuth.instance.currentUser;
 
@@ -17,11 +17,20 @@ class StoryUploadService {
       throw Exception('User not logged in');
     }
 
-    // 🖼️ STEP 2: Pick media
-    final XFile? pickedFile = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: isVideo ? null : 80,
-    );
+    XFile? pickedFile;
+
+    // 🖼️ STEP 2: Pick media (IMAGE / VIDEO)
+    if (isVideo) {
+      pickedFile = await _picker.pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(seconds: 30), // Instagram-like limit
+      );
+    } else {
+      pickedFile = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 80,
+      );
+    }
 
     if (pickedFile == null) return;
 
@@ -31,38 +40,46 @@ class StoryUploadService {
     final String storyId =
     DateTime.now().millisecondsSinceEpoch.toString();
 
-    // 📂 STEP 4: Storage path (MUST match rules)
+    // 📂 STEP 4: Firebase Storage path
     final Reference storageRef = FirebaseStorage.instance
         .ref()
         .child('users')
         .child(user.uid)
         .child('stories')
-        .child(
-      isVideo ? '$storyId.mp4' : '$storyId.jpg',
-    );
+        .child(isVideo ? '$storyId.mp4' : '$storyId.jpg');
 
-    // 🧪 DEBUG (VERY IMPORTANT)
-    print('Uploading story for UID: ${user.uid}');
-    print(
-      'Storage path: users/${user.uid}/stories/${isVideo ? '$storyId.mp4' : '$storyId.jpg'}',
+    // ⬆️ STEP 5: Upload with correct metadata (IMPORTANT)
+    await storageRef.putFile(
+      file,
+      SettableMetadata(
+        contentType: isVideo ? 'video/mp4' : 'image/jpeg',
+      ),
     );
-
-    // ⬆️ STEP 5: Upload to Firebase Storage
-    await storageRef.putFile(file);
 
     // 🔗 STEP 6: Get download URL
     final String downloadUrl = await storageRef.getDownloadURL();
 
-    // 🗄️ STEP 7: Save story metadata to Firestore
+    // 🗄️ STEP 7: Fetch user info
     final userDoc = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .get();
 
     final data = userDoc.data();
-    final String username = (data?['username'] ?? data?['name'] ?? data?['full_name'] ?? data?['business_name'])?.toString().trim() ?? 'User';
-    final String? userPhotoUrl = data?['profilePhoto']?.toString();
 
+    final String username =
+        (data?['username'] ??
+            data?['name'] ??
+            data?['full_name'] ??
+            data?['business_name'])
+            ?.toString()
+            .trim() ??
+            'User';
+
+    final String userPhotoUrl =
+        data?['profilePhoto']?.toString() ?? '';
+
+    // 🗃️ STEP 8: Save story metadata to Firestore
     await FirebaseFirestore.instance
         .collection('stories')
         .doc(storyId)
@@ -70,7 +87,7 @@ class StoryUploadService {
       'id': storyId,
       'userId': user.uid,
       'username': username,
-      'userPhotoUrl': userPhotoUrl ?? '',
+      'userPhotoUrl': userPhotoUrl,
       'mediaUrl': downloadUrl,
       'mediaType': isVideo ? 'video' : 'image',
       'createdAt': FieldValue.serverTimestamp(),
@@ -80,7 +97,7 @@ class StoryUploadService {
       'viewers': [],
     });
 
-
-    print('Story uploaded successfully');
+    // 🧪 DEBUG
+    print('✅ Story uploaded successfully');
   }
 }

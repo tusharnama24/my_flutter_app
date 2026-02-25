@@ -24,6 +24,7 @@ import '../editprofilepage.dart';
 import '../main.dart'; // LoginPage
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
+import 'package:halo/Bottom Pages/saved_posts_page.dart';
 import 'package:halo/utils/search_utils.dart';
 import 'edit_profile_sections.dart'; // Edit pages for profile sections
 
@@ -2823,6 +2824,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                                 msg: 'Failed to update privacy');
                           }
                         }
+                      } else if (value == 'Saved') {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (ctx) => const SavedPostsPage(),
+                          ),
+                        );
                       } else if (value == 'Settings') {
                         final result = await Navigator.push(
                           context,
@@ -2838,6 +2846,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                       }
                     },
                     itemBuilder: (context) => const [
+                      PopupMenuItem(
+                        value: 'Saved',
+                        child: Text('Saved'),
+                      ),
                       PopupMenuItem(
                         value: 'Settings',
                         child: Text('Settings'),

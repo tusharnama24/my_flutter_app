@@ -118,6 +118,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return Theme(
       data: Theme.of(context).copyWith(textTheme: textTheme),
       child: Scaffold(
+        resizeToAvoidBottomInset: true,
         body: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -592,37 +593,22 @@ class _InputBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding:
-      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE5E5E5),
-        boxShadow: [
-          BoxShadow(
-            blurRadius: 6,
-            offset: const Offset(0, -2),
-            color: Colors.black.withOpacity(0.06),
-          ),
-        ],
-      ),
+      color: Colors.white, // 🔴 IMPORTANT: solid color
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       child: SafeArea(
         top: false,
         child: Row(
           children: [
             IconButton(
-              onPressed: () {
-                // TODO: camera attachment
-              },
-              icon: const Icon(Icons.camera_alt_outlined),
+              onPressed: () {},
+              icon: const Icon(Icons.camera_alt_outlined, color: Colors.black87),
             ),
             Expanded(
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 2,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
+                  color: const Color(0xFFF2F2F2),
+                  borderRadius: BorderRadius.circular(20),
                 ),
                 child: TextField(
                   controller: controller,
@@ -630,7 +616,14 @@ class _InputBar extends StatelessWidget {
                   maxLines: 5,
                   onChanged: onChanged,
                   textCapitalization: TextCapitalization.sentences,
-                  style: const TextStyle(color: Colors.black),
+
+                  // ✅ FIX VISIBILITY
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontSize: 14,
+                  ),
+                  cursorColor: Colors.black,
+
                   decoration: const InputDecoration(
                     isDense: true,
                     hintText: 'Message...',
@@ -642,20 +635,8 @@ class _InputBar extends StatelessWidget {
               ),
             ),
             IconButton(
-              onPressed: () {
-                // TODO: voice note
-              },
-              icon: const Icon(Icons.mic_none),
-            ),
-            IconButton(
-              onPressed: () {
-                // TODO: gallery picker
-              },
-              icon: const Icon(Icons.image_outlined),
-            ),
-            IconButton(
               onPressed: onSend,
-              icon: const Icon(Icons.send_rounded),
+              icon: const Icon(Icons.send_rounded, color: kSecondaryColor),
             ),
           ],
         ),

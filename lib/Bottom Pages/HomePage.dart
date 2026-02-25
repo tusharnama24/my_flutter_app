@@ -38,8 +38,12 @@ as aspirant_profile;
 import 'package:halo/Profile%20Pages/guru_profile_page.dart'
 as guru_profile;
 
+import 'package:halo/services/feed_service.dart';
+import 'package:halo/widgets/save_button.dart';
+
 import 'NotificationPage.dart';
 import 'SearchPage.dart';
+import 'ExplorePage.dart';
 
 // ---- THEME COLORS ----
 const Color kPrimaryColor = Color(0xFFA58CE3);
@@ -52,6 +56,15 @@ const Color kIgSecondaryText = Color(0xFF8E8E8E);
 const Color kIgLikeRed = Color(0xFFED4956);
 const Color kIgPostBackground = Colors.white;
 
+/// Reads profile photo URL from user document (tries profilePhoto, photoURL, profile_photo, avatar).
+String _profilePhotoUrlFromUser(Map<String, dynamic>? data) {
+  if (data == null) return '';
+  final v = data['profilePhoto'] ?? data['photoURL'] ?? data['profile_photo'] ?? data['avatar'];
+  if (v == null) return '';
+  final s = v.toString().trim();
+  return s.isEmpty ? '' : s;
+}
+
 class HomePage extends StatefulWidget {
   @override
   _HomePageState createState() => _HomePageState();
@@ -60,9 +73,11 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<RefreshIndicatorState> _refreshKey = GlobalKey<RefreshIndicatorState>();
+  final FeedService _feedService = FeedService();
   bool _promptedLocation = false;
   List<String> _interests = const [];
   int _feedTabIndex = 0; // 0 = For you, 1 = Following (UI only)
+  String _contentPreference = ''; // "image" | "video" for ranking; empty = neutral
 
   @override
   void initState() {
@@ -372,11 +387,13 @@ class _HomePageState extends State<HomePage> {
                       // For you | Following (UI only)
                       _buildFeedSegmentedControl(),
                       const SizedBox(height: 8),
-                      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: FirebaseFirestore.instance
-                          .collection('posts')
-                          .limit(100)
-                          .snapshots(),
+                      StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+                      stream: FirebaseAuth.instance
+                          .authStateChanges()
+                          .asyncExpand((user) => _feedService.getRankedFeedStream(
+                                currentUserId: user?.uid ?? '',
+                                userPreference: _contentPreference,
+                              )),
                         builder: (context, snapshot) {
                         if (snapshot.connectionState ==
                             ConnectionState.waiting) {
@@ -393,43 +410,23 @@ class _HomePageState extends State<HomePage> {
                           );
                         }
 
-                        final allDocs = snapshot.data?.docs ?? [];
-                        // Sort by timestamp or createdAt (newest first) so guru/aspirant/wellness posts appear
-                        final docs = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(allDocs)
-                          ..sort((a, b) {
-                            final aData = a.data();
-                            final bData = b.data();
-                            final aTs = aData['timestamp'] ?? aData['createdAt'];
-                            final bTs = bData['timestamp'] ?? bData['createdAt'];
-                            if (aTs == null) return 1;
-                            if (bTs == null) return -1;
-                            if (aTs is Timestamp && bTs is Timestamp) return bTs.compareTo(aTs);
-                            return 0;
-                          });
-
-                        List<QueryDocumentSnapshot<Map<String, dynamic>>> filtered = docs;
+                        final rankedDocs = snapshot.data ?? [];
+                        List<QueryDocumentSnapshot<Map<String, dynamic>>> filtered = rankedDocs;
 
                         if (_interests.isNotEmpty) {
-                          filtered = docs.where((d) {
+                          filtered = rankedDocs.where((d) {
                             final data = d.data();
-
                             final accountType =
-                            (data['accountType'] ?? '').toString().toLowerCase();
-
-                            // ✅ ALWAYS show guru posts
+                                (data['accountType'] ?? '').toString().toLowerCase();
                             if (accountType == 'guru') return true;
-
                             final tags = (data['tags'] as List?)
                                 ?.map((e) => e.toString())
                                 .toList() ??
                                 [];
-
                             if (tags.isEmpty) return true;
-
                             return tags.any((t) => _interests.contains(t));
                           }).toList();
                         }
-
 
                         if (filtered.isEmpty) {
                           return Padding(
@@ -515,34 +512,54 @@ class _HomePageState extends State<HomePage> {
                                                   .doc(userId)
                                                   .snapshots(),
                                               builder: (context, userSnapshot) {
-                                                final username = userSnapshot.hasData &&
-                                                        userSnapshot.data!.exists
-                                                    ? (userSnapshot.data!.data()?['username'] ?? 
-                                                       userSnapshot.data!.data()?['name'] ?? 
-                                                       userSnapshot.data!.data()?['full_name'] ??
+                                                final doc = userSnapshot.data;
+                                                final data = doc?.data();
+                                                final username = (doc != null && doc.exists)
+                                                    ? (data?['username'] ?? 
+                                                       data?['name'] ?? 
+                                                       data?['full_name'] ??
                                                        'User')
                                                     : 'User';
-                                                
-                                                final profilePhoto = userSnapshot.hasData &&
-                                                        userSnapshot.data!.exists
-                                                    ? (userSnapshot.data!.data()?['profilePhoto'] as String?)
-                                                    : null;
-                                                final accountType = (userSnapshot.data!.data()?['accountType'] as String?)
+                                                final profilePhotoUrl = _profilePhotoUrlFromUser(data);
+                                                final accountType = (data?['accountType'] as String?)
                                                     ?.toLowerCase() ?? 'aspirant';
 
                                                 return ListTile(
                                                   contentPadding:
                                                   const EdgeInsets.symmetric(
                                                       horizontal: 14, vertical: 6),
-                                                  leading: CircleAvatar(
-                                                    radius: 20,
-                                                    backgroundColor: Colors.grey.shade200,
-                                                    backgroundImage: profilePhoto != null && profilePhoto.isNotEmpty
-                                                        ? CachedNetworkImageProvider(profilePhoto)
-                                                        : const AssetImage(
-                                                            'assets/images/Profile.png')
-                                                            as ImageProvider,
-                                                    onBackgroundImageError: (_, __) {},
+                                                  leading: SizedBox(
+                                                    width: 40,
+                                                    height: 40,
+                                                    child: CircleAvatar(
+                                                      radius: 20,
+                                                      backgroundColor: Colors.grey.shade200,
+                                                      child: profilePhotoUrl.isNotEmpty
+                                                          ? ClipOval(
+                                                              child: CachedNetworkImage(
+                                                                imageUrl: profilePhotoUrl,
+                                                                width: 40,
+                                                                height: 40,
+                                                                fit: BoxFit.cover,
+                                                                placeholder: (_, __) => Icon(
+                                                                  Icons.person,
+                                                                  color: Colors.grey.shade400,
+                                                                  size: 24,
+                                                                ),
+                                                                errorWidget: (_, __, ___) => Icon(
+                                                                  Icons.person,
+                                                                  color: Colors.grey.shade400,
+                                                                  size: 24,
+                                                                ),
+                                                              ),
+                                                            )
+                                                          : null,
+                                                      backgroundImage: profilePhotoUrl.isEmpty
+                                                          ? const AssetImage(
+                                                              'assets/images/Profile.png')
+                                                              as ImageProvider
+                                                          : null,
+                                                    ),
                                                   ),
                                                   title: Text(
                                                     username,
@@ -642,7 +659,7 @@ class _HomePageState extends State<HomePage> {
                                         postId: filtered[index].id,
                                         child: media.isNotEmpty
                                             ? _PostMedia(media: media)
-                                            : (images.isNotEmpty
+                                            : (images.isNotEmpty && images.first.trim().isNotEmpty
                                                 ? ClipRRect(
                                                     borderRadius:
                                                     BorderRadius.circular(8),
@@ -667,7 +684,7 @@ class _HomePageState extends State<HomePage> {
                                                           ),
                                                     ),
                                                   )
-                                                : imageUrl.isNotEmpty
+                                                : imageUrl.trim().isNotEmpty
                                                     ? ClipRRect(
                                                         borderRadius:
                                                         BorderRadius.circular(8),
@@ -754,17 +771,23 @@ class _HomePageState extends State<HomePage> {
               if (index == 2) {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => AddPostPage()),
+                  MaterialPageRoute(builder: (context) => ExplorePage()),
                 );
               }
               if (index == 3) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => AddPostPage()),
+                );
+              }
+              if (index == 4) {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
                       builder: (context) => NotificationPage()),
                 );
               }
-              if (index == 4) {
+              if (index == 5) {
                 () async {
                   final uid = FirebaseAuth.instance.currentUser?.uid;
                   if (uid == null) {
@@ -839,6 +862,10 @@ class _HomePageState extends State<HomePage> {
                 label: 'Search',
               ),
               BottomNavigationBarItem(
+                icon: Icon(Icons.explore_rounded),
+                label: 'Explore',
+              ),
+              BottomNavigationBarItem(
                 icon: Icon(Icons.add_box_outlined),
                 label: 'Add Post',
               ),
@@ -873,12 +900,12 @@ class _StoriesStrip extends StatelessWidget {
     GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
 
     final myUid = FirebaseAuth.instance.currentUser?.uid;
-    if (myUid == null) {
+    if (myUid == null || myUid.isEmpty) {
       return const SizedBox(height: 110);
     }
 
-    // Keep stream instance stable
-    final storiesStream = StoryService().fetchStories();
+    final storyService = StoryService();
+    final rankedStream = storyService.fetchStoriesRanked(myUid);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -912,11 +939,11 @@ class _StoriesStrip extends StatelessWidget {
           ),
         ),
 
-        // 🔹 Stories list
+        // 🔹 Stories list (ranked: current user first, then by storyScore desc)
         SizedBox(
           height: 110,
-          child: StreamBuilder<List<StoryModel>>(
-            stream: storiesStream,
+          child: StreamBuilder<RankedStoriesResult>(
+            stream: rankedStream,
             builder: (context, snapshot) {
               if (!snapshot.hasData) {
                 return const Center(
@@ -924,10 +951,9 @@ class _StoriesStrip extends StatelessWidget {
                 );
               }
 
-              final groupedStories =
-              groupStoriesByUser(snapshot.data!);
-              final userIds =
-              storyDisplayOrder(groupedStories, myUid);
+              final result = snapshot.data!;
+              final groupedStories = result.grouped;
+              final userIds = result.orderedUserIds;
 
               return ListView.builder(
                 scrollDirection: Axis.horizontal,
@@ -953,12 +979,21 @@ class _StoriesStrip extends StatelessWidget {
 
                     return GestureDetector(
                       onTap: () {
-                        showModalBottomSheet(
-                          context: context,
-                          backgroundColor: Colors.transparent,
-                          isScrollControlled: true,
-                          builder: (_) => const StoryUploadSheet(),
-                        );
+                        if (hasStories) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => StoryViewerPage(stories: myStories),
+                            ),
+                          );
+                        } else {
+                          showModalBottomSheet(
+                            context: context,
+                            backgroundColor: Colors.transparent,
+                            isScrollControlled: true,
+                            builder: (_) => const StoryUploadSheet(),
+                          );
+                        }
                       },
                       child: Padding(
                         padding:
@@ -974,19 +1009,21 @@ class _StoriesStrip extends StatelessWidget {
                                   hasUnseen: hasStories && hasUnseen,
                                   isSeen: hasStories && !hasUnseen,
                                 ),
-                                const Positioned(
-                                  bottom: 0,
-                                  right: 0,
-                                  child: CircleAvatar(
-                                    radius: 10,
-                                    backgroundColor: Colors.blue,
-                                    child: Icon(
-                                      Icons.add,
-                                      size: 16,
-                                      color: Colors.white,
+                                if (!hasStories)
+                                  const Positioned(
+                                    bottom: 0,
+                                    right: 0,
+                                    child: CircleAvatar(
+                                      radius: 10,
+                                      backgroundColor: Colors.blue,
+                                      child: Icon(
+                                        Icons.add,
+                                        size: 16,
+                                        color: Colors.white,
+                                      ),
                                     ),
                                   ),
-                                ),
+
                               ],
                             ),
                             const SizedBox(height: 6),
@@ -1107,10 +1144,10 @@ class _StoryAvatar extends StatelessWidget {
           radius: 28,
           backgroundColor: Colors.grey.shade200,
           backgroundImage:
-          imageUrl != null && imageUrl!.isNotEmpty
-              ? CachedNetworkImageProvider(imageUrl!)
+          (imageUrl ?? '').isNotEmpty
+              ? CachedNetworkImageProvider(imageUrl ?? '')
               : null,
-          child: imageUrl == null || imageUrl!.isEmpty
+          child: (imageUrl ?? '').isEmpty
               ? const Icon(
             Icons.person,
             size: 28,
@@ -1544,7 +1581,7 @@ class _PostMediaState extends State<_PostMedia> {
     final first =
     Map<String, dynamic>.from(widget.media.first as Map);
     final type = (first['type'] ?? 'image').toString();
-    final url = (first['url'] ?? '').toString();
+    final url = (first['url'] ?? '').toString().trim();
 
     if (type == 'video') {
       return SizedBox(
@@ -1554,6 +1591,13 @@ class _PostMediaState extends State<_PostMedia> {
       );
     }
 
+    if (url.isEmpty) {
+      return Container(
+        height: 300,
+        color: Colors.grey.shade200,
+        child: const Center(child: Icon(Icons.image_not_supported, color: Colors.grey)),
+      );
+    }
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
@@ -1587,30 +1631,52 @@ class _NetworkVideo extends StatefulWidget {
 }
 
 class _NetworkVideoState extends State<_NetworkVideo> {
-  late final VideoPlayerController _controller;
+  VideoPlayerController? _controller;
+  bool _initialized = false;
+  bool _error = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url))
-      ..initialize().then((_) {
+    if (widget.url.trim().isEmpty) {
+      setState(() => _error = true);
+      return;
+    }
+    try {
+      _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      _controller!.initialize().then((_) {
         if (!mounted) return;
-        _controller
+        _controller!
           ..setLooping(true)
           ..play();
-        setState(() {});
+        setState(() => _initialized = true);
+      }).catchError((Object e) {
+        if (!mounted) return;
+        setState(() => _error = true);
       });
+    } catch (_) {
+      setState(() => _error = true);
+    }
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_controller.value.isInitialized) {
+    if (_error) {
+      return Container(
+        height: 300,
+        color: Colors.black26,
+        child: const Center(
+          child: Icon(Icons.videocam_off, color: Colors.white54, size: 48),
+        ),
+      );
+    }
+    if (!_initialized || _controller == null || !_controller!.value.isInitialized) {
       return Container(
         height: 300,
         color: Colors.black12,
@@ -1618,6 +1684,7 @@ class _NetworkVideoState extends State<_NetworkVideo> {
       );
     }
 
+    final c = _controller!;
     return Stack(
       alignment: Alignment.center,
       children: [
@@ -1625,15 +1692,15 @@ class _NetworkVideoState extends State<_NetworkVideo> {
           child: FittedBox(
             fit: BoxFit.cover,
             child: SizedBox(
-              width: _controller.value.size.width,
-              height: _controller.value.size.height,
-              child: VideoPlayer(_controller),
+              width: c.value.size.width,
+              height: c.value.size.height,
+              child: VideoPlayer(c),
             ),
           ),
         ),
         IconButton(
           icon: Icon(
-            _controller.value.isPlaying
+            c.value.isPlaying
                 ? Icons.pause_circle_filled
                 : Icons.play_circle_filled,
             color: Colors.white,
@@ -1641,9 +1708,7 @@ class _NetworkVideoState extends State<_NetworkVideo> {
           ),
           onPressed: () {
             setState(() {
-              _controller.value.isPlaying
-                  ? _controller.pause()
-                  : _controller.play();
+              c.value.isPlaying ? c.pause() : c.play();
             });
           },
         ),
@@ -1738,9 +1803,9 @@ class _PostActionsState extends State<_PostActions> {
                   : const Stream.empty(),
               builder: (context, likeSnapshot) {
                 final isLiked =
-                    likeSnapshot.hasData && likeSnapshot.data!.exists;
+                    likeSnapshot.hasData && (likeSnapshot.data?.exists ?? false);
                 return IconButton(
-                  icon: Icon(
+                  icon: Icon( 
                     isLiked ? Icons.favorite : Icons.favorite_border,
                     color: isLiked ? kIgLikeRed : kIgPrimaryText,
                     size: 28,
@@ -1766,15 +1831,11 @@ class _PostActionsState extends State<_PostActions> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             ),
             const Spacer(),
-            IconButton(
-              icon: Icon(Icons.bookmark_border, size: 26, color: kIgPrimaryText),
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Save functionality coming soon!')),
-                );
-              },
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            SaveButton(
+              postId: widget.postId,
+              currentUserId: _currentUserId,
+              iconSize: 26,
+              color: kIgPrimaryText,
             ),
           ],
         ),
@@ -1807,7 +1868,7 @@ class _PostActionsState extends State<_PostActions> {
                     final commentCount =
                         commentCountSnapshot.data?.docs.length ?? 0;
                     final isLiked =
-                        myLikeSnapshot.hasData && myLikeSnapshot.data!.exists;
+                        myLikeSnapshot.hasData && (myLikeSnapshot.data?.exists ?? false);
                     final textTheme = Theme.of(context).textTheme;
                     String likeText;
                     if (likeCount == 0) {

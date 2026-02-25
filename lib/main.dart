@@ -11,6 +11,7 @@ import 'package:halo/widgets/google_sign_in_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'interest_selection_page.dart';
 import 'app_theme_mode.dart';
+import 'package:flutter/services.dart';
 
 // ----------------- HALO THEME CONSTANTS -----------------
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -25,6 +26,14 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   await loadAppThemeMode();
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      systemNavigationBarColor: Colors.white,
+      systemNavigationBarIconBrightness: Brightness.dark,
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+    ),
+  );
   runApp(MyApp());
 }
 
