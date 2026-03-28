@@ -41,13 +41,13 @@ dependencies:
   cupertino_icons: ^1.0.8
 
   # 🔥 Firebase (ALL COMPATIBLE)
-  firebase_core: ^2.27.0
-  firebase_auth: ^4.17.0
-  cloud_firestore: ^4.15.0
-  firebase_storage: ^11.7.7
-  firebase_messaging: ^14.7.10
+  firebase_core: ^3.13.0
+  firebase_auth: ^5.5.2
+  cloud_firestore: ^5.6.5
+  firebase_storage: ^12.4.5
+  firebase_messaging: ^15.2.5
   # 🔐 Auth
-  google_sign_in: ^6.2.1
+  google_sign_in: 6.2.1
 
   # Others
   cached_network_image: ^3.3.1
@@ -77,6 +77,7 @@ flutter_icons:
 
 dependency_overrides:
   web: ^0.5.1
+  google_sign_in_ios: 5.7.1
 
 
   # The "flutter_lints" package below contains a set of recommended lints to
