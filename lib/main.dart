@@ -380,97 +380,80 @@ Last updated: ${DateTime.now().year}''',
   }
 
   Future<void> _signin() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+  if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    setState(() => _isLoading = true);
+  setState(() => _isLoading = true);
 
-    String input = _usernameController.text.trim();
-    String password = _passwordController.text.trim();
+  String input = _usernameController.text.trim();
+  String password = _passwordController.text.trim();
 
-    try {
-      String email = '';
+  try {
+    String email = '';
 
-      // If input looks like an email
-      if (input.contains('@')) {
-        email = input;
-      } else {
-        // Otherwise, search by username or mobile
-        QuerySnapshot querySnapshot = await _firestore
+    if (input.contains('@')) {
+      email = input;
+    } else {
+      QuerySnapshot querySnapshot = await _firestore
+          .collection('users')
+          .where('username', isEqualTo: input)
+          .get();
+
+      if (querySnapshot.docs.isEmpty) {
+        querySnapshot = await _firestore
             .collection('users')
-            .where('username', isEqualTo: input)
+            .where('mobile', isEqualTo: input)
             .get();
-
-        if (querySnapshot.docs.isEmpty) {
-          querySnapshot = await _firestore
-              .collection('users')
-              .where('mobile', isEqualTo: input)
-              .get();
-        }
-
-        if (querySnapshot.docs.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('User not found!')),
-          );
-          setState(() => _isLoading = false);
-          return;
-        }
-
-        email = querySnapshot.docs.first['email'];
       }
 
-      // Login using Firebase Auth
-      UserCredential userCredential =
-      await _auth.signInWithEmailAndPassword(email: email, password: password);
-
-      // Update last seen
-      await _firestore.collection('users').doc(userCredential.user!.uid).set(
-        {
-          'lastSeen': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login Successful')),
-      );
-
-      // Backfill interests from Firestore if present
-      try {
-        final uid = userCredential.user!.uid;
-        final doc = await _firestore.collection('users').doc(uid).get();
-        final interests = (doc.data()?['interests'] as List?)
-            ?.map((e) => e.toString())
-            .toList() ??
-            [];
-        if (interests.isNotEmpty) {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setStringList('user_interests', interests.cast<String>());
-          await prefs.setBool('interests_completed', true);
-        }
-      } catch (_) {}
-
-      // After login, route to interests if not completed yet
-      final prefs = await SharedPreferences.getInstance();
-      final completed = prefs.getBool('interests_completed') ?? false;
-      if (!completed) {
-        await Navigator.push<bool>(
-          context,
-          MaterialPageRoute(builder: (_) => const InterestSelectionPage()),
+      if (querySnapshot.docs.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('User not found!')),
         );
+        setState(() => _isLoading = false);
+        return;
       }
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => HomePage()),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Login Failed: ${e.toString()}')),
-      );
-    } finally {
-      setState(() => _isLoading = false);
+      email = querySnapshot.docs.first['email'];
     }
+
+    UserCredential userCredential = await _auth.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+    // Update last seen
+    await _firestore.collection('users').doc(userCredential.user!.uid).set(
+      {'lastSeen': FieldValue.serverTimestamp()},
+      SetOptions(merge: true),
+    );
+
+    // Backfill interests from Firestore into SharedPreferences
+    try {
+      final uid = userCredential.user!.uid;
+      final doc = await _firestore.collection('users').doc(uid).get();
+      final interests = (doc.data()?['interests'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [];
+      if (interests.isNotEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setStringList('user_interests', interests.cast<String>());
+        await prefs.setBool('interests_completed', true);
+      }
+    } catch (_) {}
+
+    // ✅ DO NOTHING HERE — AuthGate stream will automatically
+    // detect the login and rebuild with StartupRouter → HomePage
+    // No manual Navigator calls needed!
+
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Login Failed: ${e.toString()}')),
+    );
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
   }
+}
 
   InputDecoration _inputDecoration({
     required String label,
