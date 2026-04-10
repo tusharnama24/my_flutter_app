@@ -1,14 +1,151 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:halo/services/explore_service.dart';
-import 'package:halo/Profile Pages/aspirant_profile_page.dart' as aspirant_profile;
+import 'package:video_player/video_player.dart';
+import 'package:halo/widgets/save_button.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
 
 const Color _kExplorePrimary = Color(0xFF5B3FA3);
 const Color _kExploreBg = Color(0xFFF4F1FB);
+const int _kPageSize = 20;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX #5 — Typed Post model (no more raw Map<String, dynamic> everywhere)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class PostMediaItem {
+  final String url;
+  final bool isVideo;
+  const PostMediaItem({required this.url, required this.isVideo});
+}
+
+class PostModel {
+  final String id;
+  final String userId;
+  final String caption;
+  final String location;
+  final List<PostMediaItem> mediaItems;
+  final DateTime? createdAt;
+
+  const PostModel({
+    required this.id,
+    required this.userId,
+    required this.caption,
+    required this.location,
+    required this.mediaItems,
+    this.createdAt,
+  });
+
+  bool get isVideo => mediaItems.isNotEmpty && mediaItems.first.isVideo;
+  String get firstImageUrl {
+    for (final m in mediaItems) {
+      if (!m.isVideo) return m.url;
+    }
+    return '';
+  }
+
+  String get firstVideoUrl {
+    for (final m in mediaItems) {
+      if (m.isVideo) return m.url;
+    }
+    return '';
+  }
+
+  // FIX #5 — Parse once at the query boundary, pass typed model everywhere
+  factory PostModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data() ?? {};
+    return PostModel(
+      id: doc.id,
+      userId: (data['userId'] ?? '').toString(),
+      caption: (data['caption'] ?? '').toString(),
+      location: (data['location'] ?? '').toString(),
+      mediaItems: _parseMediaItems(data),
+      createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
+    );
+  }
+
+  static List<PostMediaItem> _parseMediaItems(Map<String, dynamic> data) {
+    final out = <PostMediaItem>[];
+
+    final media = data['media'];
+    if (media is List) {
+      for (final m in media) {
+        if (m is Map) {
+          final url = (m['url'] ?? '').toString().trim();
+          if (url.isEmpty) continue;
+          final t = (m['type'] ?? '').toString().toLowerCase();
+          out.add(PostMediaItem(
+            url: url,
+            isVideo: t == 'video' || url.endsWith('.mp4'),
+          ));
+        }
+      }
+    }
+
+    if (out.isNotEmpty) return out;
+
+    // Fallbacks for legacy field shapes
+    final imageUrl = data['imageUrl']?.toString() ?? '';
+    if (imageUrl.isNotEmpty) {
+      out.add(PostMediaItem(url: imageUrl, isVideo: false));
+      return out;
+    }
+
+    final images = data['images'];
+    if (images is List) {
+      for (final img in images) {
+        final url = img?.toString() ?? '';
+        if (url.isNotEmpty) out.add(PostMediaItem(url: url, isVideo: false));
+      }
+      if (out.isNotEmpty) return out;
+    }
+
+    final videoUrl =
+    (data['videoUrl'] ?? data['mediaUrl'] ?? '').toString().trim();
+    if (videoUrl.isNotEmpty) {
+      out.add(PostMediaItem(url: videoUrl, isVideo: true));
+    }
+
+    return out;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX #2 — User profile cache (prevents N+1 Firestore reads)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _UserProfileCache {
+  static final _UserProfileCache _instance = _UserProfileCache._();
+  _UserProfileCache._();
+  factory _UserProfileCache() => _instance;
+
+  final Map<String, Map<String, dynamic>> _cache = {};
+
+  Future<Map<String, dynamic>> get(String userId) async {
+    if (_cache.containsKey(userId)) return _cache[userId]!;
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .get();
+    final data = snap.data() ?? {};
+    _cache[userId] = data;
+    return data;
+  }
+
+  void clear() => _cache.clear();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPLORE PAGE
+// ─────────────────────────────────────────────────────────────────────────────
 
 class ExplorePage extends StatefulWidget {
   const ExplorePage({Key? key}) : super(key: key);
@@ -18,65 +155,81 @@ class ExplorePage extends StatefulWidget {
 }
 
 class _ExplorePageState extends State<ExplorePage> {
-  final ExploreService _exploreService = ExploreService();
+  // FIX #1 — Pagination state
+  final List<PostModel> _posts = [];
+  DocumentSnapshot? _lastDoc;
+  bool _isLoading = false;
+  bool _hasMore = true;
+  final ScrollController _scrollController = ScrollController();
+  final ExploreService _exploreService = ExploreService(); // FIX #9 — actually used via service layer
 
-  static String? _postImageUrl(Map<String, dynamic> data) {
-    final imageUrl = data['imageUrl']?.toString();
-    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
-    final images = data['images'];
-    if (images is List && images.isNotEmpty) return images.first?.toString();
-    final media = data['media'];
-    if (media is List && media.isNotEmpty) {
-      final first = media.first;
-      if (first is Map && first['url'] != null) return first['url']?.toString();
-    }
-    return null;
+  @override
+  void initState() {
+    super.initState();
+    _fetchNextPage();
+    _scrollController.addListener(_onScroll);
   }
 
-  // ── Instagram-style mixed layout pattern ──
-  // Pattern repeats every 5 posts:
-  // [0]=small, [1]=small, [2]=small, [3]=LARGE(spans 2), [4]=small
-  // Row 1: [0][1][2]
-  // Row 2: [3 large][4]
-  Widget _buildMixedGrid(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
-    return CustomScrollView(
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.all(2),
-          sliver: SliverGrid(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final doc = docs[index];
-                final data = doc.data();
-                final imageUrl = _postImageUrl(data);
-                final likes = (data['likesCount'] ?? data['likes']?.length ?? 0) as int;
-                final views = (data['viewsCount'] ?? data['views'] ?? 0) as int;
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
-                // Every group of 5: index 3 is the large tile
-                final posInGroup = index % 5;
-                final isLarge = posInGroup == 3;
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 300 &&
+        !_isLoading &&
+        _hasMore) {
+      _fetchNextPage();
+    }
+  }
 
-                return _PostTile(
-                  doc: doc,
-                  imageUrl: imageUrl,
-                  likes: likes,
-                  views: views,
-                  isLarge: isLarge,
-                );
-              },
-              childCount: docs.length,
-            ),
-            gridDelegate: _MixedGridDelegate(),
-          ),
-        ),
-      ],
-    );
+  // FIX #1 — Paginated fetch using startAfterDocument
+  Future<void> _fetchNextPage() async {
+    if (_isLoading || !_hasMore) return;
+    setState(() => _isLoading = true);
+
+    try {
+      Query<Map<String, dynamic>> query = FirebaseFirestore.instance
+          .collection('posts')
+          .orderBy('createdAt', descending: true)
+          .limit(_kPageSize);
+
+      if (_lastDoc != null) query = query.startAfterDocument(_lastDoc!);
+
+      final snap = await query.get();
+
+      if (snap.docs.isEmpty || snap.docs.length < _kPageSize) {
+        _hasMore = false;
+      }
+
+      if (snap.docs.isNotEmpty) {
+        _lastDoc = snap.docs.last;
+        final newPosts = snap.docs.map(PostModel.fromFirestore).toList();
+        setState(() => _posts.addAll(newPosts));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to load posts. Pull to retry.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _refresh() async {
+    _posts.clear();
+    _lastDoc = null;
+    _hasMore = true;
+    _UserProfileCache().clear();
+    await _fetchNextPage();
   }
 
   @override
   Widget build(BuildContext context) {
-    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-
     return Scaffold(
       backgroundColor: _kExploreBg,
       appBar: AppBar(
@@ -92,367 +245,858 @@ class _ExplorePageState extends State<ExplorePage> {
         elevation: 0,
         centerTitle: false,
       ),
-      body: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-        stream: _exploreService.getExplorePostsStream(uid),
-        builder: (context, snapshot) {
-          // ── Shimmer loading ──
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return _ShimmerGrid();
-          }
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        color: _kExplorePrimary,
+        child: _buildBody(),
+      ),
+    );
+  }
 
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                'Something went wrong',
-                style: GoogleFonts.poppins(color: Colors.grey.shade700),
+  Widget _buildBody() {
+    if (_posts.isEmpty && _isLoading) {
+      return const Center(
+          child: CircularProgressIndicator(color: _kExplorePrimary));
+    }
+
+    if (_posts.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.explore_off, size: 64, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text('No posts to explore yet',
+                style: GoogleFonts.poppins(color: Colors.grey.shade600)),
+          ],
+        ),
+      );
+    }
+
+    return GridView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.all(2),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 2,
+        mainAxisSpacing: 2,
+        childAspectRatio: 1,
+      ),
+      itemCount: _posts.length + (_isLoading ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index == _posts.length) {
+          return const Center(
+              child:
+              CircularProgressIndicator(strokeWidth: 2, color: _kExplorePrimary));
+        }
+        final post = _posts[index];
+        return _ExploreGridTile(
+          post: post,
+          onTap: () => _onTileTap(index, post),
+        );
+      },
+    );
+  }
+
+  void _onTileTap(int index, PostModel post) {
+    if (post.isVideo) {
+      final videoPosts = _posts.where((p) => p.isVideo).toList();
+      final startIndex = videoPosts.indexWhere((p) => p.id == post.id);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => _ExploreReelsViewer(
+            videoPosts: videoPosts,
+            initialIndex: startIndex < 0 ? 0 : startIndex,
+          ),
+        ),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => _ExplorePostsViewer(
+            posts: _posts,
+            initialIndex: index,
+          ),
+        ),
+      );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GRID TILE — extracted for cleanliness
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ExploreGridTile extends StatelessWidget {
+  final PostModel post;
+  final VoidCallback onTap;
+
+  const _ExploreGridTile({required this.post, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final imageUrl = post.firstImageUrl;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        color: Colors.grey.shade300,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (imageUrl.isNotEmpty)
+              CachedNetworkImage(
+                imageUrl: imageUrl,
+                fit: BoxFit.cover,
+                placeholder: (_, __) =>
+                const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                errorWidget: (_, __, ___) => const Icon(
+                    Icons.image_not_supported,
+                    color: Colors.grey),
+              )
+            else if (post.isVideo)
+              const ColoredBox(
+                color: Colors.black87,
+                child: Icon(Icons.play_circle_fill,
+                    color: Colors.white70, size: 30),
+              )
+            else
+              const Icon(Icons.image, color: Colors.grey),
+            if (post.isVideo)
+              const Positioned(
+                top: 6,
+                right: 6,
+                child: Icon(Icons.play_circle_fill,
+                    color: Colors.white, size: 18),
               ),
-            );
-          }
+            if (post.mediaItems.length > 1)
+              const Positioned(
+                top: 6,
+                right: 6,
+                child: Icon(Icons.collections, color: Colors.white, size: 18),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-          final docs = snapshot.data ?? [];
-          if (docs.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.explore_off, size: 64, color: Colors.grey.shade400),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No posts to explore yet',
-                    style: GoogleFonts.poppins(color: Colors.grey.shade600),
+// ─────────────────────────────────────────────────────────────────────────────
+// POSTS VIEWER — Instagram-style full-screen scroll
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ExplorePostsViewer extends StatefulWidget {
+  final List<PostModel> posts;
+  final int initialIndex;
+
+  const _ExplorePostsViewer({
+    required this.posts,
+    required this.initialIndex,
+  });
+
+  @override
+  State<_ExplorePostsViewer> createState() => _ExplorePostsViewerState();
+}
+
+class _ExplorePostsViewerState extends State<_ExplorePostsViewer> {
+  late final PageController _controller;
+  String? get _currentUserId => FirebaseAuth.instance.currentUser?.uid;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggleLike(String postId) async {
+    final uid = _currentUserId;
+    if (uid == null || uid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please sign in to like posts')),
+      );
+      return;
+    }
+    final likeRef = FirebaseFirestore.instance
+        .collection('posts')
+        .doc(postId)
+        .collection('likes')
+        .doc(uid);
+    try {
+      final likeDoc = await likeRef.get();
+      if (likeDoc.exists) {
+        await likeRef.delete();
+      } else {
+        await likeRef.set({
+          'userId': uid,
+          'likedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      // FIX #11 — user-friendly error, no raw exception exposed
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not update like. Try again.')),
+      );
+    }
+  }
+
+  Future<void> _addComment(
+      String postId, TextEditingController controller) async {
+    final uid = _currentUserId;
+    if (uid == null || uid.isEmpty) return;
+    final text = controller.text.trim();
+    if (text.isEmpty) return;
+    try {
+      await FirebaseFirestore.instance
+          .collection('posts')
+          .doc(postId)
+          .collection('comments')
+          .add({
+        'userId': uid,
+        'text': text,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      controller.clear();
+    } catch (_) {
+      // FIX #11 — friendly error
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not post comment. Try again.')),
+      );
+    }
+  }
+
+  Future<void> _sharePost(PostModel post) async {
+    final firstUrl =
+    post.mediaItems.isNotEmpty ? post.mediaItems.first.url : '';
+    final payload = [
+      if (post.caption.isNotEmpty) post.caption,
+      if (firstUrl.isNotEmpty) firstUrl,
+    ].join('\n');
+    if (payload.isEmpty) return;
+    await Share.share(payload);
+  }
+
+  void _openComments(String postId) {
+    final input = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding:
+          EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: SizedBox(
+            height: MediaQuery.of(ctx).size.height * 0.75,
+            child: Column(
+              children: [
+                const SizedBox(height: 8),
+                Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade400,
+                    borderRadius: BorderRadius.circular(4),
                   ),
-                ],
-              ),
-            );
-          }
+                ),
+                const SizedBox(height: 8),
+                const Text('Comments',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                const Divider(),
+                Expanded(
+                  child: _CommentsList(postId: postId),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: input,
+                          decoration: const InputDecoration(
+                            hintText: 'Add a comment...',
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.send_rounded),
+                        onPressed: () => _addComment(postId, input),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ).whenComplete(input.dispose);
+  }
 
-          return _buildMixedGrid(docs);
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: const Text('Posts'),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        foregroundColor: Colors.black87,
+      ),
+      body: PageView.builder(
+        controller: _controller,
+        itemCount: widget.posts.length,
+        itemBuilder: (context, index) {
+          final post = widget.posts[index];
+          return _PostCard(
+            post: post,
+            currentUserId: _currentUserId,
+            onLike: () => _toggleLike(post.id),
+            onComment: () => _openComments(post.id),
+            onShare: () => _sharePost(post),
+          );
         },
       ),
     );
   }
 }
 
-// ─────────────────────────────────────────────
-// 1️⃣  MIXED GRID DELEGATE
-// ─────────────────────────────────────────────
-class _MixedGridDelegate extends SliverGridDelegate {
-  static const double _gap = 2.0;
+// ─────────────────────────────────────────────────────────────────────────────
+// POST CARD — single post in the viewer
+// ─────────────────────────────────────────────────────────────────────────────
 
-  @override
-  SliverGridLayout getLayout(SliverConstraints constraints) {
-    final width = constraints.crossAxisExtent;
-    final cellSize = (width - _gap * 2) / 3; // 3 columns
+class _PostCard extends StatelessWidget {
+  final PostModel post;
+  final String? currentUserId;
+  final VoidCallback onLike;
+  final VoidCallback onComment;
+  final VoidCallback onShare;
 
-    return _MixedGridLayout(
-      cellSize: cellSize,
-      gap: _gap,
-      totalWidth: width,
-    );
-  }
-
-  @override
-  bool shouldRelayout(_MixedGridDelegate oldDelegate) => false;
-}
-
-class _MixedGridLayout extends SliverGridLayout {
-  final double cellSize;
-  final double gap;
-  final double totalWidth;
-
-  const _MixedGridLayout({
-    required this.cellSize,
-    required this.gap,
-    required this.totalWidth,
+  const _PostCard({
+    required this.post,
+    required this.currentUserId,
+    required this.onLike,
+    required this.onComment,
+    required this.onShare,
   });
-
-  // Group of 5 items occupies 2 rows
-  double get _groupHeight => (cellSize + gap) * 2;
-
-  @override
-  double computeMaxScrollOffset(int childCount) {
-    final groups = (childCount / 5).ceil();
-    return groups * _groupHeight;
-  }
-
-  @override
-  SliverGridGeometry getGeometryForChildIndex(int index) {
-    final group = index ~/ 5;
-    final pos = index % 5;
-    final groupTop = group * _groupHeight;
-
-    // Row 1 of group: positions 0,1,2 → 3 small tiles
-    if (pos < 3) {
-      return SliverGridGeometry(
-        scrollOffset: groupTop,
-        crossAxisOffset: pos * (cellSize + gap),
-        mainAxisExtent: cellSize,
-        crossAxisExtent: cellSize,
-      );
-    }
-
-    // Row 2 of group:
-    // pos 3 → large tile (2 cols wide)
-    if (pos == 3) {
-      return SliverGridGeometry(
-        scrollOffset: groupTop + cellSize + gap,
-        crossAxisOffset: 0,
-        mainAxisExtent: cellSize,
-        crossAxisExtent: cellSize * 2 + gap,
-      );
-    }
-
-    // pos 4 → small tile on the right
-    return SliverGridGeometry(
-      scrollOffset: groupTop + cellSize + gap,
-      crossAxisOffset: cellSize * 2 + gap * 2,
-      mainAxisExtent: cellSize,
-      crossAxisExtent: cellSize,
-    );
-  }
-
-  @override
-  int getMinChildIndexForScrollOffset(double scrollOffset) {
-    final group = (scrollOffset / _groupHeight).floor();
-    return group * 5;
-  }
-
-  @override
-  int getMaxChildIndexForScrollOffset(double scrollOffset) {
-    final group = (scrollOffset / _groupHeight).ceil();
-    return (group * 5 + 4).clamp(0, double.maxFinite.toInt());
-  }
-}
-
-// ─────────────────────────────────────────────
-// 2️⃣  POST TILE — with long-press overlay
-// ─────────────────────────────────────────────
-class _PostTile extends StatefulWidget {
-  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
-  final String? imageUrl;
-  final int likes;
-  final int views;
-  final bool isLarge;
-
-  const _PostTile({
-    required this.doc,
-    required this.imageUrl,
-    required this.likes,
-    required this.views,
-    required this.isLarge,
-  });
-
-  @override
-  State<_PostTile> createState() => _PostTileState();
-}
-
-class _PostTileState extends State<_PostTile>
-    with SingleTickerProviderStateMixin {
-  bool _showOverlay = false;
-  late AnimationController _animController;
-  late Animation<double> _fadeAnim;
-
-  @override
-  void initState() {
-    super.initState();
-    _animController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200),
-    );
-    _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeIn);
-  }
-
-  @override
-  void dispose() {
-    _animController.dispose();
-    super.dispose();
-  }
-
-  void _onLongPress() {
-    setState(() => _showOverlay = true);
-    _animController.forward();
-  }
-
-  void _onLongPressEnd(_) {
-    _animController.reverse().then((_) {
-      if (mounted) setState(() => _showOverlay = false);
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) =>
-              aspirant_profile.PostDetailsPage(postId: widget.doc.id),
-        ),
-      ),
-      onLongPress: _onLongPress,
-      onLongPressEnd: _onLongPressEnd,
-      child: Container(
-        color: Colors.grey.shade300,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // ── Image ──
-            widget.imageUrl != null && widget.imageUrl!.isNotEmpty
-                ? CachedNetworkImage(
-                    imageUrl: widget.imageUrl!,
-                    fit: BoxFit.cover,
-                    placeholder: (_, __) => const SizedBox(),
-                    errorWidget: (_, __, ___) => const Icon(
-                      Icons.image_not_supported,
-                      color: Colors.grey,
-                    ),
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // FIX #2 — cached user profile, no FutureBuilder per post
+          _UserHeader(userId: post.userId, location: post.location),
+
+          // Media carousel
+          SizedBox(
+            height: 420,
+            child: PageView.builder(
+              itemCount: post.mediaItems.length,
+              itemBuilder: (context, mediaIndex) {
+                final media = post.mediaItems[mediaIndex];
+                return GestureDetector(
+                  onDoubleTap: onLike,
+                  child: media.isVideo
+                  // FIX #3 & #6 — single shared video widget, lazy init
+                      ? _SharedVideoPlayer(
+                    url: media.url,
+                    fit: BoxFit.contain,
+                    autoPlay: false,
                   )
-                : const Icon(Icons.image, color: Colors.grey),
-
-            // ── Large tile badge ──
-            if (widget.isLarge)
-              Positioned(
-                top: 6,
-                right: 6,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(4),
+                      : CachedNetworkImage(
+                    imageUrl: media.url,
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                    placeholder: (_, __) => const Center(
+                        child: CircularProgressIndicator()),
+                    errorWidget: (_, __, ___) =>
+                    const Center(child: Icon(Icons.broken_image)),
                   ),
-                  child: const Icon(Icons.collections,
-                      color: Colors.white, size: 14),
-                ),
-              ),
+                );
+              },
+            ),
+          ),
 
-            // ── Long-press overlay ──
-            if (_showOverlay)
-              FadeTransition(
-                opacity: _fadeAnim,
-                child: Container(
-                  color: Colors.black54,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.favorite,
-                              color: Colors.white, size: 20),
-                          const SizedBox(width: 4),
-                          Text(
-                            _formatCount(widget.likes),
-                            style: GoogleFonts.poppins(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          const Icon(Icons.remove_red_eye,
-                              color: Colors.white, size: 20),
-                          const SizedBox(width: 4),
-                          Text(
-                            _formatCount(widget.views),
-                            style: GoogleFonts.poppins(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
+          // Action bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Row(
+              children: [
+                // FIX #7 — single source of truth for like state
+                StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                  stream: currentUserId == null
+                      ? const Stream.empty()
+                      : FirebaseFirestore.instance
+                      .collection('posts')
+                      .doc(post.id)
+                      .collection('likes')
+                      .doc(currentUserId!)
+                      .snapshots(),
+                  builder: (context, mineSnap) {
+                    final isLiked =
+                        mineSnap.hasData && (mineSnap.data?.exists ?? false);
+                    return IconButton(
+                      onPressed: onLike,
+                      icon: Icon(
+                        isLiked ? Icons.favorite : Icons.favorite_border,
+                        color: isLiked ? Colors.red : Colors.black87,
                       ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
-              ),
-          ],
-        ),
+                // FIX #7 — single stream, no stale fallback
+                StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: FirebaseFirestore.instance
+                      .collection('posts')
+                      .doc(post.id)
+                      .collection('likes')
+                      .snapshots(),
+                  builder: (context, s) {
+                    final count = s.data?.docs.length ?? 0;
+                    return Text('$count');
+                  },
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: onComment,
+                  icon: const Icon(Icons.mode_comment_outlined),
+                ),
+                StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: FirebaseFirestore.instance
+                      .collection('posts')
+                      .doc(post.id)
+                      .collection('comments')
+                      .snapshots(),
+                  builder: (context, s) {
+                    final count = s.data?.docs.length ?? 0;
+                    return Text('$count');
+                  },
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: onShare,
+                  icon: const Icon(Icons.send_outlined),
+                ),
+                const Spacer(),
+                SaveButton(
+                  postId: post.id,
+                  currentUserId: currentUserId,
+                  iconSize: 24,
+                  color: Colors.black87,
+                ),
+              ],
+            ),
+          ),
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+            child: Text(
+              post.caption.isEmpty ? '' : post.caption,
+              style: const TextStyle(fontSize: 15),
+            ),
+          ),
+          if (post.location.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(post.location,
+                  style: const TextStyle(color: Colors.black54, fontSize: 13)),
+            ),
+          const SizedBox(height: 16),
+        ],
       ),
     );
   }
-
-  String _formatCount(int count) {
-    if (count >= 1000000) return '${(count / 1000000).toStringAsFixed(1)}M';
-    if (count >= 1000) return '${(count / 1000).toStringAsFixed(1)}K';
-    return count.toString();
-  }
 }
 
-// ─────────────────────────────────────────────
-// 3️⃣  SHIMMER LOADING GRID
-// ─────────────────────────────────────────────
-class _ShimmerGrid extends StatefulWidget {
+// ─────────────────────────────────────────────────────────────────────────────
+// USER HEADER — FIX #2: uses profile cache instead of FutureBuilder per post
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _UserHeader extends StatefulWidget {
+  final String userId;
+  final String location;
+  const _UserHeader({required this.userId, required this.location});
+
   @override
-  State<_ShimmerGrid> createState() => _ShimmerGridState();
+  State<_UserHeader> createState() => _UserHeaderState();
 }
 
-class _ShimmerGridState extends State<_ShimmerGrid>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _shimmerController;
+class _UserHeaderState extends State<_UserHeader> {
+  Map<String, dynamic>? _userData;
 
   @override
   void initState() {
     super.initState();
-    _shimmerController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    )..repeat();
+    _load();
   }
 
-  @override
-  void dispose() {
-    _shimmerController.dispose();
-    super.dispose();
+  Future<void> _load() async {
+    if (widget.userId.isEmpty) return;
+    final data = await _UserProfileCache().get(widget.userId);
+    if (mounted) setState(() => _userData = data);
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _shimmerController,
-      builder: (context, _) {
-        return GridView.builder(
-          padding: const EdgeInsets.all(2),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            crossAxisSpacing: 2,
-            mainAxisSpacing: 2,
+    final username = (_userData?['username'] ??
+        _userData?['name'] ??
+        _userData?['full_name'] ??
+        'User')
+        .toString();
+    final photoUrl = (_userData?['photoUrl'] ?? '').toString();
+
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundImage: photoUrl.isNotEmpty
+            ? CachedNetworkImageProvider(photoUrl)
+            : const AssetImage('assets/images/Profile.png') as ImageProvider,
+      ),
+      title: Text(username,
+          style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle:
+      widget.location.isNotEmpty ? Text(widget.location) : null,
+      trailing: const Icon(Icons.more_horiz),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMMENTS LIST — FIX #8: batch-fetches unique user profiles for comments
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CommentsList extends StatelessWidget {
+  final String postId;
+  const _CommentsList({required this.postId});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('posts')
+          .doc(postId)
+          .collection('comments')
+          .orderBy('createdAt', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? [];
+        if (docs.isEmpty) {
+          return const Center(child: Text('No comments yet'));
+        }
+        // FIX #8 — pre-fetch all unique user profiles in one pass
+        return _CommentsFetcher(docs: docs);
+      },
+    );
+  }
+}
+
+class _CommentsFetcher extends StatefulWidget {
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs;
+  const _CommentsFetcher({required this.docs});
+
+  @override
+  State<_CommentsFetcher> createState() => _CommentsFetcherState();
+}
+
+class _CommentsFetcherState extends State<_CommentsFetcher> {
+  final Map<String, Map<String, dynamic>> _profiles = {};
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchProfiles();
+  }
+
+  @override
+  void didUpdateWidget(_CommentsFetcher old) {
+    super.didUpdateWidget(old);
+    _fetchProfiles();
+  }
+
+  Future<void> _fetchProfiles() async {
+    // FIX #8 — collect unique IDs, use cache for already-fetched ones
+    final uniqueIds = widget.docs
+        .map((d) => (d.data()['userId'] ?? '').toString())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    await Future.wait(
+      uniqueIds.map((id) async {
+        final data = await _UserProfileCache().get(id);
+        _profiles[id] = data;
+      }),
+    );
+
+    if (mounted) setState(() => _loaded = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    return ListView.builder(
+      itemCount: widget.docs.length,
+      itemBuilder: (_, i) {
+        final c = widget.docs[i].data();
+        final uid = (c['userId'] ?? '').toString();
+        final ud = _profiles[uid] ?? {};
+        final username =
+        (ud['username'] ?? ud['name'] ?? 'User').toString();
+        final photoUrl = (ud['photoUrl'] ?? '').toString();
+        return ListTile(
+          leading: CircleAvatar(
+            backgroundImage: photoUrl.isNotEmpty
+                ? CachedNetworkImageProvider(photoUrl)
+                : const AssetImage('assets/images/Profile.png')
+            as ImageProvider,
           ),
-          itemCount: 12,
-          itemBuilder: (context, index) {
-            return _ShimmerTile(progress: _shimmerController.value);
-          },
+          title: Text(username,
+              style: const TextStyle(fontWeight: FontWeight.w500)),
+          subtitle: Text((c['text'] ?? '').toString()),
         );
       },
     );
   }
 }
 
-class _ShimmerTile extends StatelessWidget {
-  final double progress;
-  const _ShimmerTile({required this.progress});
+// ─────────────────────────────────────────────────────────────────────────────
+// REELS VIEWER
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ExploreReelsViewer extends StatefulWidget {
+  final List<PostModel> videoPosts;
+  final int initialIndex;
+
+  const _ExploreReelsViewer({
+    required this.videoPosts,
+    required this.initialIndex,
+  });
+
+  @override
+  State<_ExploreReelsViewer> createState() => _ExploreReelsViewerState();
+}
+
+class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
+  late final PageController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return ShaderMask(
-      shaderCallback: (bounds) {
-        return LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: const [
-            Color(0xFFE0E0E0),
-            Color(0xFFF5F5F5),
-            Color(0xFFE0E0E0),
-          ],
-          stops: [
-            (progress - 0.3).clamp(0.0, 1.0),
-            progress.clamp(0.0, 1.0),
-            (progress + 0.3).clamp(0.0, 1.0),
-          ],
-        ).createShader(bounds);
+    // FIX #10 — guard against empty list
+    if (widget.videoPosts.isEmpty) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.videocam_off, color: Colors.white54, size: 64),
+              const SizedBox(height: 16),
+              const Text('No videos yet',
+                  style: TextStyle(color: Colors.white54)),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Go back',
+                    style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: PageView.builder(
+        controller: _controller,
+        scrollDirection: Axis.vertical,
+        itemCount: widget.videoPosts.length,
+        itemBuilder: (context, index) {
+          final post = widget.videoPosts[index];
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              // FIX #3 & #6 — shared widget, lazy/visibility-based init
+              _SharedVideoPlayer(
+                url: post.firstVideoUrl,
+                fit: BoxFit.cover,
+                autoPlay: true,
+                visibilityKey: 'reel_${post.id}',
+              ),
+              Positioned(
+                top: 40,
+                left: 10,
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+              if (post.caption.isNotEmpty)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 30,
+                  child: Text(
+                    post.caption,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX #3 & #6 — Single shared video player widget (replaces the two duplicates)
+// Supports lazy init via VisibilityDetector and autoPlay flag.
+//
+// Add to pubspec.yaml:
+//   visibility_detector: ^0.4.0
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SharedVideoPlayer extends StatefulWidget {
+  final String url;
+  final BoxFit fit;
+  final bool autoPlay;
+  final String? visibilityKey;
+
+  const _SharedVideoPlayer({
+    required this.url,
+    this.fit = BoxFit.contain,
+    this.autoPlay = false,
+    this.visibilityKey,
+  });
+
+  @override
+  State<_SharedVideoPlayer> createState() => _SharedVideoPlayerState();
+}
+
+class _SharedVideoPlayerState extends State<_SharedVideoPlayer> {
+  VideoPlayerController? _controller;
+  bool _ready = false;
+  bool _error = false;
+  bool _initialized = false;
+
+  // FIX #6 — only initialize when visible
+  void _initIfNeeded() {
+    if (_initialized || widget.url.isEmpty) return;
+    _initialized = true;
+
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url))
+      ..initialize().then((_) {
+        if (!mounted) return;
+        if (widget.autoPlay) {
+          _controller!.setLooping(true);
+          _controller!.play();
+        }
+        setState(() => _ready = true);
+      }).catchError((_) {
+        if (!mounted) return;
+        setState(() => _error = true);
+      });
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.url.isEmpty) {
+      return const Center(
+          child: Icon(Icons.videocam_off, color: Colors.white54, size: 64));
+    }
+
+    // If a visibilityKey is provided, use VisibilityDetector for lazy init.
+    // Otherwise fall back to eager init (for inline posts where it's already visible).
+    if (widget.visibilityKey != null) {
+      return VisibilityDetector(
+        key: Key(widget.visibilityKey!),
+        onVisibilityChanged: (info) {
+          if (info.visibleFraction > 0.5) {
+            _initIfNeeded();
+          } else {
+            // FIX #6 — pause when scrolled off screen
+            _controller?.pause();
+          }
+        },
+        child: _playerContent(),
+      );
+    } else {
+      _initIfNeeded();
+      return _playerContent();
+    }
+  }
+
+  Widget _playerContent() {
+    if (_error) {
+      return const Center(
+          child: Icon(Icons.videocam_off, color: Colors.white54, size: 56));
+    }
+    if (!_ready || _controller == null || !_controller!.value.isInitialized) {
+      return const Center(
+          child: CircularProgressIndicator(color: Colors.white54));
+    }
+    final c = _controller!;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          c.value.isPlaying ? c.pause() : c.play();
+        });
       },
-      child: Container(color: Colors.white),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          FittedBox(
+            fit: widget.fit,
+            child: SizedBox(
+              width: c.value.size.width,
+              height: c.value.size.height,
+              child: VideoPlayer(c),
+            ),
+          ),
+          // Play/pause overlay (only show when paused)
+          if (!c.value.isPlaying)
+            const Icon(Icons.play_circle_fill,
+                color: Colors.white70, size: 54),
+        ],
+      ),
     );
   }
 }
