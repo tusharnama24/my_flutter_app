@@ -22,6 +22,17 @@ import 'package:halo/utils/search_utils.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
+import 'package:halo/services/follow_service.dart';
+import 'package:halo/widgets/follow_button.dart';
+import 'package:halo/widgets/stats_widget.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_identity_block.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_recent_posts_section.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_action_row.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_bio_card.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_cta_row.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
+import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
 
 // GURU SECTIONS
 import '../Sections/Guru Section/guru_booking_section.dart';
@@ -91,6 +102,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   // -------------------- FIREBASE --------------------
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FollowService _followService = FollowService();
   User? _currentUser;
   bool _isOwnProfile = false;
 
@@ -206,13 +218,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         final data = doc.data()!;
 
         // --------- DEBUG: account type (with fallbacks) ----------
-        final rawAccountType =
-        (data['accountType'] ?? data['category'] ?? data['profileType'] ?? 'guru')
-            .toString();
+        final rawAccountType = (data['accountType'] ?? 'guru').toString();
         final accountType = rawAccountType.toLowerCase();
         debugPrint('🔍 Guru Profile Page - Account Type: $accountType');
         debugPrint('🔍 Guru Profile Page - Is Own Profile: $_isOwnProfile');
         // ---------------------------------------------------------
+        if (_isOwnProfile && mounted && _tabController.index == 0) {
+          _tabController.animateTo(1);
+        }
 
         // Guru signup uses full_name; also support name / business_name
         final nameRaw = data['full_name'] ?? data['name'] ?? data['business_name'] ?? '';
@@ -762,18 +775,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     final String currentUserId = _currentUser!.uid;
     final String profileUserId = widget.profileUserId;
 
-    final followersDocRef = _firestore
-        .collection('users')
-        .doc(profileUserId)
-        .collection('followers')
-        .doc(currentUserId);
-
-    final followingDocRef = _firestore
-        .collection('users')
-        .doc(currentUserId)
-        .collection('following')
-        .doc(profileUserId);
-
     final bool wasFollowing = _isFollowing;
 
     setState(() {
@@ -784,43 +785,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     _followAnimController.forward(from: 0);
 
     try {
-      await _firestore.runTransaction((transaction) async {
-        final profileUserRef =
-        _firestore.collection('users').doc(profileUserId);
-        final currentUserRef =
-        _firestore.collection('users').doc(currentUserId);
-
-        if (!wasFollowing) {
-          transaction.set(followersDocRef, {
-            'followerId': currentUserId,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          transaction.set(followingDocRef, {
-            'followingId': profileUserId,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          transaction.update(profileUserRef, {
-            'followersCount': FieldValue.increment(1),
-          });
-
-          transaction.update(currentUserRef, {
-            'followingCount': FieldValue.increment(1),
-          });
-        } else {
-          transaction.delete(followersDocRef);
-          transaction.delete(followingDocRef);
-
-          transaction.update(profileUserRef, {
-            'followersCount': FieldValue.increment(-1),
-          });
-
-          transaction.update(currentUserRef, {
-            'followingCount': FieldValue.increment(-1),
-          });
-        }
-      });
+      await _followService.setFollowState(
+        currentUserId: currentUserId,
+        profileUserId: profileUserId,
+        shouldFollow: !wasFollowing,
+      );
     } catch (e) {
       debugPrint('follow toggle error: $e');
       setState(() {
@@ -1307,32 +1276,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _buildStatsCard() {
-    Widget tile(String count, String label) {
-      return Expanded(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              count,
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-                color: Colors.black87,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
@@ -1349,93 +1292,40 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       ),
       child: Row(
         children: [
-          tile(_followersCount.toString(), 'Followers'),
+          Expanded(
+            child: StatsWidget(
+              value: _followersCount.toString(),
+              label: 'Followers',
+            ),
+          ),
           Container(width: 1, height: 36, color: Colors.grey[200]),
-          tile(_followingCount.toString(), 'Following'),
+          Expanded(
+            child: StatsWidget(
+              value: _followingCount.toString(),
+              label: 'Following',
+            ),
+          ),
           Container(width: 1, height: 36, color: Colors.grey[200]),
-          tile(_postsCount.toString(), 'Posts'),
+          Expanded(
+            child: StatsWidget(
+              value: _postsCount.toString(),
+              label: 'Posts',
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildActionButtons() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
-      child: _isOwnProfile
-          ? SizedBox(
-        width: double.infinity,
-        child: OutlinedButton(
-          onPressed: _handleEditProfile,
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(30),
-            ),
-            side: const BorderSide(color: _lavender),
-          ),
-          child: const Text(
-            'Edit Profile',
-            style: TextStyle(color: Colors.black87),
-          ),
-        ),
-      )
-          : Row(
-        children: [
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, anim) =>
-                  ScaleTransition(scale: anim, child: child),
-              child: ElevatedButton.icon(
-                key: ValueKey(_isFollowing),
-                onPressed: _toggleFollow,
-                icon: Icon(
-                  _isFollowing ? Icons.check : Icons.person_add,
-                  color: _isFollowing ? Colors.black : Colors.white,
-                ),
-                label: Text(
-                  _isFollowing ? 'Following' : 'Follow',
-                  style: TextStyle(
-                    color: _isFollowing ? Colors.black : Colors.white,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                  _isFollowing ? Colors.white : _lavender,
-                  side: _isFollowing
-                      ? const BorderSide(color: _deepLavender)
-                      : null,
-                  elevation: 4,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: _openMessage,
-              icon: const Icon(Icons.message_outlined,
-                  color: Colors.black87),
-              label: const Text(
-                'Message',
-                style: TextStyle(color: Colors.black87),
-              ),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                side: BorderSide(color: Colors.grey.shade300),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return GuruActionRow(
+      isOwnProfile: _isOwnProfile,
+      isFollowing: _isFollowing,
+      onToggleFollow: _toggleFollow,
+      onMessage: _openMessage,
+      onEditProfile: _handleEditProfile,
+      lavender: _lavender,
+      deepLavender: _deepLavender,
     );
   }
 
@@ -1461,39 +1351,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _buildBioCard() {
-    final displayBio = _bio.isNotEmpty
-        ? _bio
-        : (_isOwnProfile
-        ? 'Tell aspirants how you train, your style and experience.'
-        : '');
-
-    if (displayBio.isEmpty) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        padding: const EdgeInsets.all(14),
-        child: Text(
-          displayBio,
-          style: GoogleFonts.poppins(
-            fontSize: 14,
-            height: 1.4,
-            color: Colors.black87,
-          ),
-        ),
-      ),
+    return GuruBioCard(
+      bio: _bio,
+      isOwnProfile: _isOwnProfile,
     );
   }
 
@@ -1502,183 +1362,18 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(height: _avatarOverlap + 18),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Transform.translate(
-                offset: const Offset(0, -_avatarOverlap),
-                child: _avatarWidget(),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              _fullName.isNotEmpty ? _fullName : (_username.isNotEmpty ? '@$_username' : 'Guru'),
-                              style: GoogleFonts.poppins(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          StreamBuilder<DocumentSnapshot>(
-                            stream: _firestore
-                                .collection('users')
-                                .doc(widget.profileUserId)
-                                .snapshots(),
-                            builder: (context, snapshot) {
-                              if (snapshot.hasData) {
-                                final data = snapshot.data?.data()
-                                as Map<String, dynamic>?;
-                                bool isOnline = false;
-
-                                if (data?['isOnline'] == true) {
-                                  isOnline = true;
-                                } else if (data?['lastSeen'] != null) {
-                                  final lastSeen =
-                                  (data!['lastSeen'] as Timestamp?)
-                                      ?.toDate();
-                                  if (lastSeen != null) {
-                                    isOnline = DateTime.now()
-                                        .difference(lastSeen)
-                                        .inMinutes <
-                                        2;
-                                  }
-                                }
-
-                                return Container(
-                                  width: 10,
-                                  height: 10,
-                                  decoration: BoxDecoration(
-                                    color:
-                                    isOnline ? Colors.green : Colors.grey,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 2,
-                                    ),
-                                  ),
-                                );
-                              }
-                              return const SizedBox.shrink();
-                            },
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _username.isNotEmpty ? '@$_username' : '',
-                        style: GoogleFonts.poppins(
-                          color: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      if (_primaryCategory.isNotEmpty)
-                        Text(
-                          _primaryCategory,
-                          style: GoogleFonts.poppins(
-                            fontSize: 13,
-                            color: Colors.black87,
-                          ),
-                        ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          if (_city.isNotEmpty) ...[
-                            const Icon(Icons.location_on_outlined,
-                                size: 14, color: Colors.black87),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                _city,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Colors.black87,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                          if (_experienceYears != null) ...[
-                            const SizedBox(width: 12),
-                            const Icon(Icons.school_outlined,
-                                size: 14, color: Colors.black87),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                '${_experienceYears}+ yrs exp',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Colors.black87,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      if (_languages.isNotEmpty)
-                        Text(
-                          'Languages: ${_languages.join(', ')}',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.black87,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      if (_trainingStyle.isNotEmpty)
-                        Text(
-                          'Training style: $_trainingStyle',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.black87,
-                          ),
-                        ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Icon(Icons.star,
-                              color: Colors.amber[700], size: 18),
-                          const SizedBox(width: 4),
-                          Text(
-                            _rating.toStringAsFixed(1),
-                            style: GoogleFonts.poppins(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '($_reviewCount reviews)',
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: Colors.black54,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+        GuruIdentityBlock(
+          avatar: _avatarWidget(),
+          profileUserId: widget.profileUserId,
+          fullName: _fullName,
+          username: _username,
+          primaryCategory: _primaryCategory,
+          city: _city,
+          experienceYears: _experienceYears,
+          languages: _languages,
+          trainingStyle: _trainingStyle,
+          rating: _rating,
+          reviewCount: _reviewCount,
         ),
         const SizedBox(height: 6),
         _buildBadgesRow(),
@@ -1708,7 +1403,18 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         backgroundColor: _bg,
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())
-            : NestedScrollView(
+            : GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragEnd: (details) {
+            final vx = details.primaryVelocity ?? 0;
+            if (vx.abs() < 250) return;
+            if (vx < 0 && _tabController.index < _tabController.length - 1) {
+              _tabController.animateTo(_tabController.index + 1);
+            } else if (vx > 0 && _tabController.index > 0) {
+              _tabController.animateTo(_tabController.index - 1);
+            }
+          },
+          child: NestedScrollView(
           headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
             return [
               SliverAppBar(
@@ -1818,10 +1524,12 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     ),
                     tabs: const [
                       Tab(
-                        icon: Icon(Icons.grid_on_outlined, size: 24),
+                        icon: Icon(Icons.grid_on_outlined, size: 20),
+                        text: 'Profile',
                       ),
                       Tab(
-                        icon: Icon(Icons.dashboard_outlined, size: 24),
+                        icon: Icon(Icons.dashboard_outlined, size: 20),
+                        text: 'Business',
                       ),
                     ],
                   ),
@@ -1831,6 +1539,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           },
           body: TabBarView(
             controller: _tabController,
+            physics: const BouncingScrollPhysics(),
             children: [
               // First Tab - Posts/Content (placeholder for future features)
               _buildFirstTab(),
@@ -1838,6 +1547,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               _buildSecondTab(),
             ],
           ),
+        ),
         ),
       ),
     );
@@ -1856,6 +1566,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               const SizedBox(height: 20),
               // CTA Buttons
               _buildCTAButtons(),
+              const SizedBox(height: 12),
+              _buildBusinessFeaturesShortcut(),
               const SizedBox(height: 24),
               // Popular Products Section (Figma Design)
               _buildPopularProductsSection(),
@@ -1896,79 +1608,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   //  FIRST TAB SECTION BUILDERS
   // ===================================================================
   Widget _buildCTAButtons() {
-    if (_isOwnProfile) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Expanded(
-            child: ElevatedButton(
-              onPressed: _toggleFollow,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _lavender,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                elevation: 2,
-              ),
-              child: Text(
-                _isFollowing ? 'Following' : 'Follow',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: OutlinedButton(
-              onPressed: _openMessage,
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                side: BorderSide(color: Colors.grey.shade300),
-              ),
-              child: Text(
-                'DM',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: ElevatedButton(
-              onPressed: _handleBookNow,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _deepLavender,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                elevation: 2,
-              ),
-              child: Text(
-                'Book',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return GuruCtaRow(
+      isOwnProfile: _isOwnProfile,
+      isFollowing: _isFollowing,
+      onToggleFollow: _toggleFollow,
+      onMessage: _openMessage,
+      onBook: _handleBookNow,
+      lavender: _lavender,
+      deepLavender: _deepLavender,
     );
   }
 
@@ -2153,13 +1800,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Text(
-            'Specialties (with certification)',
-            style: GoogleFonts.poppins(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
+          child: const ProfileSectionTitle(
+            title: 'Specialties (with certification)',
+            fontSize: 18,
           ),
         ),
         const SizedBox(height: 12),
@@ -2173,13 +1816,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     label: const Text('Add specializations'),
                     style: TextButton.styleFrom(foregroundColor: _lavender),
                   )
-                : Text(
-                    'No specializations yet',
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: Colors.black54,
-                    ),
-                  ),
+                : const ProfileEmptyState(text: 'No specializations yet'),
           )
         else
           Container(
@@ -2629,26 +2266,16 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Text(
-            'Last workouts',
-            style: GoogleFonts.poppins(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
+          child: const ProfileSectionTitle(
+            title: 'Last workouts',
+            fontSize: 18,
           ),
         ),
         const SizedBox(height: 12),
         if (_lastWorkouts.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Text(
-              'No workouts yet',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: Colors.black54,
-              ),
-            ),
+            child: const ProfileEmptyState(text: 'No workouts yet'),
           )
         else
           Padding(
@@ -2859,274 +2486,16 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _buildRecentPostsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Recent Posts',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.add_box_outlined, size: 20),
-                  onPressed: _openGalleryForPost,
-                  color: _lavender,
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: _firestore
-              .collection('posts')
-              .where('userId', isEqualTo: widget.profileUserId)
-              .snapshots()
-              .handleError((error) {
-            debugPrint('Error in posts stream: $error');
-          }),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20.0, vertical: 20),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            if (snapshot.hasError) {
-              debugPrint('Posts stream error: ${snapshot.error}');
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: Column(
-                  children: [
-                    Icon(Icons.error_outline, color: Colors.red[300], size: 48),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Error loading posts',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.red,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            final allDocs = snapshot.data?.docs ?? [];
-            final sortedDocs = List.from(allDocs)
-              ..sort((a, b) {
-                try {
-                  final aTime = a.data();
-                  final bTime = b.data();
-                  if (aTime is! Map<String, dynamic> || bTime is! Map<String, dynamic>) {
-                    return 0;
-                  }
-                  final aTimestamp = aTime['timestamp'] ?? aTime['createdAt'];
-                  final bTimestamp = bTime['timestamp'] ?? bTime['createdAt'];
-                  if (aTimestamp == null) return 1;
-                  if (bTimestamp == null) return -1;
-                  if (aTimestamp is Timestamp && bTimestamp is Timestamp) {
-                    return bTimestamp.compareTo(aTimestamp);
-                  }
-                  return 0;
-                } catch (e) {
-                  debugPrint('Error sorting posts: $e');
-                  return 0;
-                }
-              });
-            final docs = sortedDocs.take(9).toList();
-
-            if (docs.isEmpty) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: _isOwnProfile
-                    ? TextButton.icon(
-                        onPressed: _openGalleryForPost,
-                        icon: const Icon(Icons.add_circle_outline, size: 18),
-                        label: const Text('Create your first post'),
-                        style: TextButton.styleFrom(foregroundColor: _lavender),
-                      )
-                    : Column(
-                        children: [
-                          Icon(Icons.camera_alt_outlined,
-                              size: 64, color: Colors.grey[400]),
-                          const SizedBox(height: 12),
-                          Text(
-                            'No posts yet',
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              color: Colors.black54,
-                            ),
-                          ),
-                        ],
-                      ),
-              );
-            }
-
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Column(
-                children: docs.take(2).map((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  final imageUrl = _getPostImageUrl(data);
-                  final caption = data['caption']?.toString() ?? '';
-                  final timestamp = data['timestamp'] ?? data['createdAt'];
-                  
-                  // Extract tags from caption (hashtags)
-                  final tags = RegExp(r'#\w+').allMatches(caption).map((m) => m.group(0)!).toList();
-                  
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.04),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Profile Header
-                        Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 20,
-                                backgroundColor: _lavender.withOpacity(0.2),
-                                backgroundImage: _profilePhotoUrl != null
-                                    ? NetworkImage(_profilePhotoUrl!)
-                                    : null,
-                                child: _profilePhotoUrl == null
-                                    ? Text(
-                                        _username.isNotEmpty
-                                            ? _username[0].toUpperCase()
-                                            : 'U',
-                                        style: GoogleFonts.poppins(
-                                          color: _lavender,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      )
-                                    : null,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _username.isNotEmpty ? '@$_username' : '@user',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.black87,
-                                      ),
-                                    ),
-                                    Text(
-                                      '${_formatPostTime(timestamp)} - ${_city.isNotEmpty ? _city : "Gym"}',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 12,
-                                        color: Colors.black54,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.more_vert, size: 20),
-                                onPressed: () {},
-                                color: Colors.black54,
-                              ),
-                            ],
-                          ),
-                        ),
-                        // Post Image
-                        if (imageUrl != null && imageUrl.isNotEmpty)
-                          Container(
-                            width: double.infinity,
-                            height: 300,
-                            color: Colors.grey[200],
-                            child: Image.network(
-                              imageUrl,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => const Center(
-                                child: Icon(Icons.image, color: Colors.grey),
-                              ),
-                            ),
-                          )
-                        else
-                          Container(
-                            width: double.infinity,
-                            height: 300,
-                            color: Colors.grey[200],
-                            child: const Center(
-                              child: Icon(Icons.image, color: Colors.grey),
-                            ),
-                          ),
-                        // Caption and Tags
-                        Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (caption.isNotEmpty)
-                                Text(
-                                  caption,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 14,
-                                    color: Colors.black87,
-                                    height: 1.4,
-                                  ),
-                                ),
-                              if (tags.isNotEmpty) ...[
-                                const SizedBox(height: 8),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: tags.map((tag) {
-                                    return Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 6),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey[200],
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                      child: Text(
-                                        tag,
-                                        style: GoogleFonts.poppins(
-                                          fontSize: 12,
-                                          color: Colors.black87,
-                                        ),
-                                      ),
-                                    );
-                                  }).toList(),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-            );
-          },
-        ),
-      ],
+    return GuruRecentPostsSection(
+      profileUserId: widget.profileUserId,
+      isOwnProfile: _isOwnProfile,
+      accentColor: _lavender,
+      onCreatePost: _openGalleryForPost,
+      profilePhotoUrl: _profilePhotoUrl,
+      username: _username,
+      city: _city,
+      formatPostTime: _formatPostTime,
+      imageResolver: _getPostImageUrl,
     );
   }
 
@@ -3228,20 +2597,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             if (docs.isEmpty) {
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: Column(
-                  children: [
-                    Icon(Icons.rate_review_outlined,
-                        size: 64, color: Colors.grey[400]),
-                    const SizedBox(height: 12),
-                    Text(
-                      'No reviews yet',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.black54,
-                      ),
-                    ),
-                  ],
-                ),
+                child: const ProfileEmptyState(text: 'No reviews yet'),
               );
             }
 
@@ -3355,13 +2711,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     label: const Text('Add achievements'),
                     style: TextButton.styleFrom(foregroundColor: _lavender),
                   )
-                : Text(
-                    'No achievements yet',
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: Colors.black54,
-                    ),
-                  ),
+                : const ProfileEmptyState(text: 'No achievements yet'),
           )
         else
           SizedBox(
@@ -3475,20 +2825,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _buildSocialLinksSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+    return ProfileSectionCard(
+      title: 'Social Links',
+      titleFontSize: 18,
+      margin: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Social Links',
-            style: GoogleFonts.poppins(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 10),
           // YouTube Section
           if (_socialLinks.containsKey('youtube') ||
               _socialLinks.containsKey('YouTube'))
@@ -3773,27 +3117,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         if (_reviews.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.rate_review_outlined, size: 48, color: Colors.grey[400]),
-                    const SizedBox(height: 8),
-                    Text(
-                      'No testimonials yet',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            child: const ProfileEmptyState(
+              text: 'No testimonials yet',
+              card: true,
             ),
           )
         else
@@ -6166,6 +5492,42 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       ],
     );
   }
+
+  Widget _buildBusinessFeaturesShortcut() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => _tabController.animateTo(1),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _lavender.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _lavender.withOpacity(0.25)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.dashboard_customize_outlined, color: _deepLavender),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Open Business Tools: Booking, Classes, Earnings, Students, Analytics',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: _deepLavender,
+                  ),
+                ),
+              ),
+              Icon(Icons.arrow_forward_ios_rounded, size: 16, color: _deepLavender),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ===================================================================
@@ -6571,3 +5933,5 @@ class _AllVideosPage extends StatelessWidget {
     );
   }
 }
+
+

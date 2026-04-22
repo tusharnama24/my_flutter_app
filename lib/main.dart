@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'firebase_options.dart';
 import 'package:halo/widgets/google_sign_in_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -34,7 +35,16 @@ void main() async {
       statusBarIconBrightness: Brightness.dark,
     ),
   );
-  runApp(MyApp());
+  runApp(const ProviderScope(child: _AppRoot()));
+}
+
+class _AppRoot extends StatelessWidget {
+  const _AppRoot({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MyApp();
+  }
 }
 
 class MyApp extends StatelessWidget {

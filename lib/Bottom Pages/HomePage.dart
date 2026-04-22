@@ -563,7 +563,21 @@ class _HomePageState extends State<HomePage> {
                                         _DoubleTapHeartOverlay(
                                           postId: filtered[index].id,
                                           child: media.isNotEmpty
-                                              ? _PostMedia(media: media)
+                                              ? _PostMedia(
+                                                  media: media,
+                                                  onVideoTap: () {
+                                                    Navigator.push(
+                                                      context,
+                                                      MaterialPageRoute(
+                                                        builder: (_) => ExplorePage(
+                                                          openReelsOnStart: true,
+                                                          initialReelPostId:
+                                                              filtered[index].id,
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                )
                                               : (images.isNotEmpty &&
                                               images.first
                                                   .trim()
@@ -1429,8 +1443,10 @@ class _DoubleTapHeartOverlayState extends State<_DoubleTapHeartOverlay>
 
 class _PostMedia extends StatelessWidget {
   final List<dynamic> media;
+  final VoidCallback? onVideoTap;
 
-  const _PostMedia({Key? key, required this.media}) : super(key: key);
+  const _PostMedia({Key? key, required this.media, this.onVideoTap})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -1441,10 +1457,13 @@ class _PostMedia extends StatelessWidget {
     final url = (first['url'] ?? '').toString().trim();
 
     if (type == 'video') {
-      return SizedBox(
-          height: 300,
-          width: double.infinity,
-          child: _NetworkVideo(url: url));
+      return GestureDetector(
+        onTap: onVideoTap,
+        child: SizedBox(
+            height: 300,
+            width: double.infinity,
+            child: _NetworkVideo(url: url)),
+      );
     }
 
     if (url.isEmpty) {
@@ -1456,6 +1475,221 @@ class _PostMedia extends StatelessWidget {
     }
 
     return _PostImage(url: url);
+  }
+}
+
+class _FeedVideoItem {
+  final String postId;
+  final String videoUrl;
+  final String caption;
+  final String location;
+
+  const _FeedVideoItem({
+    required this.postId,
+    required this.videoUrl,
+    required this.caption,
+    required this.location,
+  });
+}
+
+class _ReelsViewerPage extends StatefulWidget {
+  final List<_FeedVideoItem> videoItems;
+  final int initialIndex;
+
+  const _ReelsViewerPage({
+    Key? key,
+    required this.videoItems,
+    required this.initialIndex,
+  }) : super(key: key);
+
+  @override
+  State<_ReelsViewerPage> createState() => _ReelsViewerPageState();
+}
+
+class _ReelsViewerPageState extends State<_ReelsViewerPage> {
+  late final PageController _pageController;
+  int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          PageView.builder(
+            controller: _pageController,
+            scrollDirection: Axis.vertical,
+            itemCount: widget.videoItems.length,
+            onPageChanged: (index) => setState(() => _currentIndex = index),
+            itemBuilder: (context, index) {
+              return _ReelsVideoPlayer(
+                key: ValueKey(widget.videoItems[index].postId),
+                videoUrl: widget.videoItems[index].videoUrl,
+                isActive: index == _currentIndex,
+              );
+            },
+          ),
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 10,
+            left: 10,
+            child: IconButton(
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
+            ),
+          ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: MediaQuery.of(context).padding.bottom + 24,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (widget.videoItems[_currentIndex].caption.trim().isNotEmpty)
+                  Text(
+                    widget.videoItems[_currentIndex].caption,
+                    style: GoogleFonts.poppins(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                if (widget.videoItems[_currentIndex].location.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      widget.videoItems[_currentIndex].location,
+                      style: GoogleFonts.poppins(
+                        color: Colors.white70,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReelsVideoPlayer extends StatefulWidget {
+  final String videoUrl;
+  final bool isActive;
+
+  const _ReelsVideoPlayer({
+    Key? key,
+    required this.videoUrl,
+    required this.isActive,
+  }) : super(key: key);
+
+  @override
+  State<_ReelsVideoPlayer> createState() => _ReelsVideoPlayerState();
+}
+
+class _ReelsVideoPlayerState extends State<_ReelsVideoPlayer> {
+  VideoPlayerController? _controller;
+  bool _initialized = false;
+  bool _error = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initController();
+  }
+
+  Future<void> _initController() async {
+    final url = widget.videoUrl.trim();
+    if (url.isEmpty) {
+      if (mounted) setState(() => _error = true);
+      return;
+    }
+
+    try {
+      final controller = VideoPlayerController.networkUrl(Uri.parse(url));
+      await controller.initialize();
+      controller.setLooping(true);
+      _controller = controller;
+
+      if (!mounted) return;
+      setState(() => _initialized = true);
+      _syncPlayback();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReelsVideoPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncPlayback();
+  }
+
+  void _syncPlayback() {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (widget.isActive) {
+      controller.play();
+    } else {
+      controller.pause();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error) {
+      return const Center(
+        child: Icon(Icons.videocam_off, color: Colors.white54, size: 54),
+      );
+    }
+
+    if (!_initialized || _controller == null || !_controller!.value.isInitialized) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      );
+    }
+
+    final controller = _controller!;
+    return GestureDetector(
+      onTap: () {
+        if (controller.value.isPlaying) {
+          controller.pause();
+        } else {
+          controller.play();
+        }
+        setState(() {});
+      },
+      child: SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: controller.value.size.width,
+            height: controller.value.size.height,
+            child: VideoPlayer(controller),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1523,31 +1757,15 @@ class _NetworkVideoState extends State<_NetworkVideo> {
     }
 
     final c = _controller!;
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        SizedBox.expand(
-          child: FittedBox(
-            fit: BoxFit.cover,
-            child: SizedBox(
-              width: c.value.size.width,
-              height: c.value.size.height,
-              child: VideoPlayer(c),
-            ),
-          ),
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: c.value.size.width,
+          height: c.value.size.height,
+          child: VideoPlayer(c),
         ),
-        IconButton(
-          icon: Icon(
-            c.value.isPlaying
-                ? Icons.pause_circle_filled
-                : Icons.play_circle_filled,
-            color: Colors.white,
-            size: 48,
-          ),
-          onPressed: () => setState(
-                  () => c.value.isPlaying ? c.pause() : c.play()),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -1637,19 +1855,6 @@ class _PostActionsState extends State<_PostActions> {
           builder: (context, commentSnap) {
             final commentCount = commentSnap.data?.docs.length ?? 0;
 
-            String likeText;
-            if (likeCount == 0) {
-              likeText = 'Be the first to like this';
-            } else if (isLiked && likeCount == 1) {
-              likeText = 'Liked by you';
-            } else if (isLiked && likeCount >= 2) {
-              likeText = 'Liked by you and ${likeCount - 1} others';
-            } else if (likeCount == 1) {
-              likeText = 'Liked by 1 person';
-            } else {
-              likeText = 'Liked by $likeCount people';
-            }
-
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1702,23 +1907,21 @@ class _PostActionsState extends State<_PostActions> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        likeText,
+                        '$likeCount ${likeCount == 1 ? 'like' : 'likes'}',
                         style: textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.w600,
                             color: kIgPrimaryText,
                             fontSize: 14),
                       ),
-                      if (commentCount > 0) ...[
-                        const SizedBox(height: 4),
-                        GestureDetector(
-                          onTap: _showComments,
-                          child: Text(
-                            'View all $commentCount ${commentCount == 1 ? 'comment' : 'comments'}',
-                            style: textTheme.bodyMedium?.copyWith(
-                                color: kIgSecondaryText, fontSize: 14),
-                          ),
+                      const SizedBox(height: 4),
+                      GestureDetector(
+                        onTap: _showComments,
+                        child: Text(
+                          'View all $commentCount ${commentCount == 1 ? 'comment' : 'comments'}',
+                          style: textTheme.bodyMedium?.copyWith(
+                              color: kIgSecondaryText, fontSize: 14),
                         ),
-                      ],
+                      ),
                     ],
                   ),
                 ),

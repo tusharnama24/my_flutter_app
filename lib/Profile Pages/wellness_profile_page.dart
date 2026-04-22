@@ -26,6 +26,16 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
 import 'package:halo/newpostpage.dart';
+import 'package:halo/services/follow_service.dart';
+import 'package:halo/widgets/follow_button.dart';
+import 'package:halo/widgets/stats_widget.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_identity_block.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_recent_posts_section.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_action_row.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_bio_card.dart';
+import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
 
 // ===================================================================
 //  SLIVER APP BAR DELEGATE (for TabBar)
@@ -75,6 +85,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   // -------------------- FIREBASE --------------------
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FollowService _followService = FollowService();
 
   User? _currentUser;
   bool _isOwnProfile = false;
@@ -382,43 +393,26 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
     final uid = _currentUser!.uid;
     final pid = widget.profileUserId;
-
-    final refFollower = _firestore
-        .collection('users')
-        .doc(pid)
-        .collection('followers')
-        .doc(uid);
-
-    final refFollowing = _firestore
-        .collection('users')
-        .doc(uid)
-        .collection('following')
-        .doc(pid);
+    final wasFollowing = _isFollowing;
 
     setState(() {
-      _isFollowing = !_isFollowing;
-      _followersCount += _isFollowing ? 1 : -1;
+      _isFollowing = !wasFollowing;
+      _followersCount += wasFollowing ? -1 : 1;
+      if (_followersCount < 0) _followersCount = 0;
     });
 
     try {
-      await _firestore.runTransaction((tx) async {
-        if (_isFollowing) {
-          tx.set(refFollower, {'createdAt': FieldValue.serverTimestamp()});
-          tx.set(refFollowing, {'createdAt': FieldValue.serverTimestamp()});
-          tx.update(_firestore.collection('users').doc(pid),
-              {'followersCount': FieldValue.increment(1)});
-        } else {
-          tx.delete(refFollower);
-          tx.delete(refFollowing);
-          tx.update(_firestore.collection('users').doc(pid),
-              {'followersCount': FieldValue.increment(-1)});
-        }
-      });
+      await _followService.setFollowState(
+        currentUserId: uid,
+        profileUserId: pid,
+        shouldFollow: !wasFollowing,
+      );
     } catch (e) {
       Fluttertoast.showToast(msg: 'Failed to update follow status');
       setState(() {
-        _isFollowing = !_isFollowing;
-        _followersCount += _isFollowing ? 1 : -1;
+        _isFollowing = wasFollowing;
+        _followersCount += wasFollowing ? 1 : -1;
+        if (_followersCount < 0) _followersCount = 0;
       });
     }
   }
@@ -590,131 +584,14 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(height: _avatarOverlap + 18),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Transform.translate(
-                offset: const Offset(0, -_avatarOverlap),
-                child: _avatarWidget(),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              _businessName.isNotEmpty ? _businessName : 'Business Name',
-                              style: GoogleFonts.poppins(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _username.isNotEmpty ? '@$_username' : '',
-                        style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          color: _mutedText,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      if (_category.isNotEmpty)
-                        GestureDetector(
-                          onTap: _isOwnProfile ? _editCategory : null,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _lavender.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: _lavender.withOpacity(0.3), width: 1),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    _category,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: _deepLavender,
-                                      letterSpacing: 0.2,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                if (_isOwnProfile) ...[
-                                  const SizedBox(width: 4),
-                                  const Icon(Icons.edit, size: 12, color: _lavender),
-                                ],
-                              ],
-                            ),
-                          ),
-                        )
-                      else if (_isOwnProfile)
-                        GestureDetector(
-                          onTap: _editCategory,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _lavender.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: _lavender.withOpacity(0.3), width: 1),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  'Add Category',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: _deepLavender,
-                                    letterSpacing: 0.2,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                const Icon(Icons.add, size: 12, color: _lavender),
-                              ],
-                            ),
-                          ),
-                        ),
-                      const SizedBox(height: 6),
-                      if (_location.isNotEmpty)
-                        Row(
-                          children: [
-                            const Icon(Icons.location_on_outlined,
-                                size: 14, color: _mutedText),
-                            const SizedBox(width: 4),
-                            Text(
-                              _location,
-                              style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                color: _mutedText,
-                                fontWeight: FontWeight.w400,
-                              ),
-                            ),
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+        WellnessIdentityBlock(
+          avatar: _avatarWidget(),
+          businessName: _businessName,
+          username: _username,
+          category: _category,
+          location: _location,
+          isOwnProfile: _isOwnProfile,
+          onEditCategory: _editCategory,
         ),
         const SizedBox(height: 16),
         _buildStatsBar(),
@@ -753,213 +630,52 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _statTile(_followersCount.toString(), 'Followers'),
+          StatsWidget(value: _followersCount.toString(), label: 'Followers'),
           Container(width: 1, height: 40, color: Colors.grey[200]),
-          _statTile(_followingCount.toString(), 'Following'),
+          StatsWidget(value: _followingCount.toString(), label: 'Following'),
           Container(width: 1, height: 40, color: Colors.grey[200]),
-          _statTile(_postsCount.toString(), 'Posts'),
+          StatsWidget(value: _postsCount.toString(), label: 'Posts'),
           Container(width: 1, height: 40, color: Colors.grey[200]),
-          _statTile(_likesCount.toString(), 'Likes'),
+          StatsWidget(value: _likesCount.toString(), label: 'Likes'),
         ],
       ),
-    );
-  }
-
-  Widget _statTile(String count, String label) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          count,
-          style: GoogleFonts.poppins(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: Colors.black87,
-            letterSpacing: -0.5,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          label,
-          style: GoogleFonts.poppins(
-            fontSize: 12,
-            color: _mutedText,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.2,
-          ),
-        ),
-      ],
     );
   }
 
   Widget _buildActionButtons() {
-    if (_isOwnProfile) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0),
-        child: SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(
-            onPressed: () async {
-              await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => EditProfilePage(
-                        initialName: _businessName,
-                        initialUsername: _username,
-                        initialBio: _bio,
-                        initialGender: '',
-                        initialprofessiontype: '',
-                      )));
-              _loadProfileData();
-            },
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(30),
-              ),
-              side: const BorderSide(color: _lavender),
-            ),
-            child: Text(
-              'Edit Profile',
-              style: GoogleFonts.poppins(
-                color: _lavender,
-                fontWeight: FontWeight.w600,
-              ),
+    return WellnessActionRow(
+      isOwnProfile: _isOwnProfile,
+      isFollowing: _isFollowing,
+      onToggleFollow: _toggleFollow,
+      onMessage: _openMessage,
+      onBook: _openBooking,
+      onEditProfile: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => EditProfilePage(
+              initialName: _businessName,
+              initialUsername: _username,
+              initialBio: _bio,
+              initialGender: '',
+              initialprofessiontype: '',
             ),
           ),
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Row(
-        children: [
-          Expanded(
-            child: ElevatedButton(
-              onPressed: _toggleFollow,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _lavender,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                elevation: 3,
-                shadowColor: _lavender.withOpacity(0.4),
-              ),
-              child: Text(
-                _isFollowing ? 'Following' : 'Follow',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: OutlinedButton(
-              onPressed: _openMessage,
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                side: BorderSide(color: Colors.grey.shade300, width: 1.5),
-              ),
-              child: Text(
-                'Message',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: ElevatedButton(
-              onPressed: _openBooking,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _deepLavender,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                elevation: 3,
-                shadowColor: _deepLavender.withOpacity(0.4),
-              ),
-              child: Text(
-                'Book',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+        );
+        _loadProfileData();
+      },
+      lavender: _lavender,
+      deepLavender: _deepLavender,
     );
   }
 
   Widget _buildBioCard() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: _cardColor,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: _lavender.withOpacity(0.08),
-              blurRadius: 20,
-              offset: const Offset(0, 4),
-              spreadRadius: 0,
-            ),
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-              spreadRadius: 0,
-            ),
-          ],
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Text(
-                _bio,
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  height: 1.6,
-                  color: Colors.black87,
-                  fontWeight: FontWeight.w400,
-                  letterSpacing: 0.1,
-                ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (_isOwnProfile)
-              Padding(
-                padding: const EdgeInsets.only(left: 12),
-                child: IconButton(
-                  icon: const Icon(Icons.edit_outlined, size: 20),
-                  onPressed: _editBio,
-                  color: _lavender,
-                  iconSize: 20,
-                ),
-              ),
-          ],
-        ),
-      ),
+    return WellnessBioCard(
+      bio: _bio,
+      isOwnProfile: _isOwnProfile,
+      cardColor: _cardColor,
+      accentColor: _lavender,
+      onEditBio: _editBio,
     );
   }
 
@@ -1201,7 +917,18 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         backgroundColor: _bg,
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())
-            : NestedScrollView(
+            : GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragEnd: (details) {
+            final vx = details.primaryVelocity ?? 0;
+            if (vx.abs() < 250) return;
+            if (vx < 0 && _tabController.index < _tabController.length - 1) {
+              _tabController.animateTo(_tabController.index + 1);
+            } else if (vx > 0 && _tabController.index > 0) {
+              _tabController.animateTo(_tabController.index - 1);
+            }
+          },
+          child: NestedScrollView(
           headerSliverBuilder:
               (BuildContext context, bool innerBoxIsScrolled) {
             return [
@@ -1317,11 +1044,13 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           },
           body: TabBarView(
             controller: _tabController,
+            physics: const BouncingScrollPhysics(),
             children: [
               _buildFirstTab(),
               _buildSecondTab(),
             ],
           ),
+        ),
         ),
       ),
     );
@@ -1650,90 +1379,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   }
 
   Widget _buildRecentPostsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Recent Posts',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black87,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              TextButton(
-                onPressed: () => _showAllPosts(),
-                child: Text(
-                  'View All Posts →',
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    color: _deepLavender,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_recentPosts.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Text(
-              'No posts yet',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: _mutedText,
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-          )
-        else
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: 4,
-                mainAxisSpacing: 4,
-              ),
-              itemCount: _recentPosts.length > 9 ? 9 : _recentPosts.length,
-              itemBuilder: (context, index) {
-                final post = _recentPosts[index];
-                return Container(
-                  decoration: BoxDecoration(
-                    color: Colors.grey[200],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: post['imageUrl'] != null &&
-                      post['imageUrl'].toString().isNotEmpty
-                      ? ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.network(
-                      post['imageUrl'].toString(),
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const Center(
-                        child: Icon(Icons.image, color: Colors.grey),
-                      ),
-                    ),
-                  )
-                      : const Center(
-                    child: Icon(Icons.image, color: Colors.grey),
-                  ),
-                );
-              },
-            ),
-          ),
-      ],
+    return WellnessRecentPostsSection(
+      recentPosts: _recentPosts,
+      onViewAll: _showAllPosts,
+      mutedTextColor: _mutedText,
+      accentColor: _deepLavender,
     );
   }
 
@@ -2062,46 +1712,30 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Reviews',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black87,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              if (_reviewCount > 0)
-                TextButton(
-                  onPressed: () => _showAllReviews(),
-                  child: Text(
-                    'View All Reviews',
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      color: _deepLavender,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
+          child: ProfileSectionTitle(
+            title: 'Reviews',
+            fontSize: 18,
+            trailing: _reviewCount > 0
+                ? TextButton(
+                    onPressed: () => _showAllReviews(),
+                    child: Text(
+                      'View All Reviews',
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        color: _deepLavender,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.2,
+                      ),
                     ),
-                  ),
-                ),
-            ],
+                  )
+                : null,
           ),
         ),
         const SizedBox(height: 12),
         if (_reviews.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Text(
-              'No reviews yet',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: _mutedText,
-                fontWeight: FontWeight.w400,
-              ),
-            ),
+            child: const ProfileEmptyState(text: 'No reviews yet'),
           )
         else
           Column(
@@ -2205,41 +1839,22 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   }
 
   Widget _buildSocialLinksSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+    return ProfileSectionCard(
+      title: 'Social Links',
+      titleFontSize: 18,
+      margin: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+      trailing: _isOwnProfile
+          ? IconButton(
+              icon: const Icon(Icons.edit_outlined, size: 20),
+              onPressed: _editSocialLinks,
+              color: _lavender,
+            )
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Social Links',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black87,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined, size: 20),
-                  onPressed: _editSocialLinks,
-                  color: _lavender,
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
           if (_socialLinks.isEmpty)
-            Text(
-              'No social links added',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: _mutedText,
-                fontWeight: FontWeight.w400,
-              ),
-            )
+            const ProfileEmptyState(text: 'No social links added')
           else
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -4842,3 +4457,4 @@ class _OfferDetailsPage extends StatelessWidget {
     );
   }
 }
+

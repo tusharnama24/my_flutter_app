@@ -26,6 +26,18 @@ import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/Bottom Pages/saved_posts_page.dart';
 import 'package:halo/utils/search_utils.dart';
+import 'package:halo/services/follow_service.dart';
+import 'package:halo/widgets/follow_button.dart';
+import 'package:halo/widgets/stats_widget.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_identity_block.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_recent_posts_grid.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_action_row.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_bio_card.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_fitness_goals_section.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
+import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
+import 'package:halo/screens/profile/widgets/common/profile_empty_state_rich.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
 import 'edit_profile_sections.dart'; // Edit pages for profile sections
 
 // ===================================================================
@@ -60,6 +72,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   User? _currentUser; // logged in user
+  final FollowService _followService = FollowService();
   bool _isOwnProfile = false; // current user == profile user ?
 
   // -------------------- USER DATA (ASPIRANT) --------------------
@@ -148,7 +161,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       await _firestore.collection('users').doc(widget.profileUserId).get();
       if (doc.exists) {
         final data = doc.data()!;
-        final accountType = data['category']?.toString().toLowerCase() ?? 'aspirant';
+        final accountType = (data['accountType'] ?? 'aspirant').toString().toLowerCase();
 
 // agar guru found → guru page open
         if (accountType == 'guru') {
@@ -369,18 +382,6 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     final String currentUserId = _currentUser!.uid;
     final String profileUserId = widget.profileUserId;
 
-    final followersDocRef = _firestore
-        .collection('users')
-        .doc(profileUserId)
-        .collection('followers')
-        .doc(currentUserId);
-
-    final followingDocRef = _firestore
-        .collection('users')
-        .doc(currentUserId)
-        .collection('following')
-        .doc(profileUserId);
-
     final bool wasFollowing = _isFollowing;
 
     // Optimistic UI
@@ -392,45 +393,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     _followAnimController.forward(from: 0);
 
     try {
-      await _firestore.runTransaction((transaction) async {
-        final profileUserRef =
-        _firestore.collection('users').doc(profileUserId);
-        final currentUserRef =
-        _firestore.collection('users').doc(currentUserId);
-
-        if (!wasFollowing) {
-          // FOLLOW
-          transaction.set(followersDocRef, {
-            'followerId': currentUserId,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          transaction.set(followingDocRef, {
-            'followingId': profileUserId,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          transaction.update(profileUserRef, {
-            'followersCount': FieldValue.increment(1),
-          });
-
-          transaction.update(currentUserRef, {
-            'followingCount': FieldValue.increment(1),
-          });
-        } else {
-          // UNFOLLOW
-          transaction.delete(followersDocRef);
-          transaction.delete(followingDocRef);
-
-          transaction.update(profileUserRef, {
-            'followersCount': FieldValue.increment(-1),
-          });
-
-          transaction.update(currentUserRef, {
-            'followingCount': FieldValue.increment(-1),
-          });
-        }
-      });
+      await _followService.setFollowState(
+        currentUserId: currentUserId,
+        profileUserId: profileUserId,
+        shouldFollow: !wasFollowing,
+      );
     } catch (e) {
       debugPrint('follow toggle error: $e');
 
@@ -501,7 +468,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
               final snap = await ref.putFile(File(image.path));
               final url = await snap.ref.getDownloadURL();
               final uid = FirebaseAuth.instance.currentUser!.uid;
-
+              print('uid: $uid');
 // 🔹 get accountType from users collection
               final userDoc = await FirebaseFirestore.instance
                   .collection('users')
@@ -657,30 +624,6 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildStatsCard() {
-    Widget tile(String count, String label) {
-      return Expanded(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              count,
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
@@ -697,119 +640,46 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       ),
       child: Row(
         children: [
-          tile(_followersCount.toString(), 'Followers'),
+          Expanded(
+            child: StatsWidget(
+              value: _followersCount.toString(),
+              label: 'Followers',
+            ),
+          ),
           Container(width: 1, height: 36, color: Colors.grey[200]),
-          tile(_followingCount.toString(), 'Following'),
+          Expanded(
+            child: StatsWidget(
+              value: _followingCount.toString(),
+              label: 'Following',
+            ),
+          ),
           Container(width: 1, height: 36, color: Colors.grey[200]),
-          tile(_postsCount.toString(), 'Posts'),
+          Expanded(
+            child: StatsWidget(
+              value: _postsCount.toString(),
+              label: 'Posts',
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildActionButtons() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
-      child: _isOwnProfile
-          ? SizedBox(
-        width: double.infinity,
-        child: OutlinedButton(
-          onPressed: _handleEditProfile,
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(30),
-            ),
-            side: const BorderSide(color: _lavender),
-          ),
-          child: const Text('Edit Profile'),
-        ),
-      )
-          : Row(
-        children: [
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, anim) =>
-                  ScaleTransition(scale: anim, child: child),
-              child: ElevatedButton.icon(
-                key: ValueKey(_isFollowing),
-                onPressed: _toggleFollow,
-                icon: Icon(
-                  _isFollowing ? Icons.check : Icons.person_add,
-                  color: _isFollowing ? Colors.black : Colors.white,
-                ),
-                label: Text(
-                  _isFollowing ? 'Following' : 'Follow',
-                  style: TextStyle(
-                    color: _isFollowing ? Colors.black : Colors.white,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                  _isFollowing ? Colors.white : _lavender,
-                  side: _isFollowing
-                      ? const BorderSide(color: _deepLavender)
-                      : null,
-                  elevation: 4,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: _openMessage,
-              icon: const Icon(Icons.message_outlined),
-              label: const Text('Message'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                side: BorderSide(color: Colors.grey.shade300),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return AspirantActionRow(
+      isOwnProfile: _isOwnProfile,
+      isFollowing: _isFollowing,
+      onToggleFollow: _toggleFollow,
+      onMessage: _openMessage,
+      onEditProfile: _handleEditProfile,
+      accentColor: _lavender,
     );
   }
 
   Widget _buildBioCard() {
-    final displayBio = _bio.isNotEmpty
-        ? _bio
-        : (_isOwnProfile
-        ? 'Add a short bio — tell people what you love (cricket, dance, yoga, etc.).'
-        : '');
-
-    if (displayBio.isEmpty) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        padding: const EdgeInsets.all(14),
-        child: Text(
-          displayBio,
-          style: GoogleFonts.poppins(fontSize: 14, height: 1.4),
-        ),
-      ),
+    return AspirantBioCard(
+      bio: _bio,
+      isOwnProfile: _isOwnProfile,
     );
   }
 
@@ -856,10 +726,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // -------------------- Suggested Gurus --------------------
   Widget _buildSuggestedGurusSection() {
-    // Assume: users collection me field: profileType == 'guru'
+    // users collection standard field: accountType == 'guru'
     Query<Map<String, dynamic>> query = _firestore
         .collection('users')
-        .where('profileType', isEqualTo: 'guru');
+        .where('accountType', isEqualTo: 'guru');
 
     if (_interests.isNotEmpty) {
       final List<String> topInterests = _interests.length > 5
@@ -918,11 +788,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 }
                 final docs = snapshot.data?.docs ?? [];
                 if (docs.isEmpty) {
-                  return Text(
-                    'No gurus found yet for your interests.',
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                    ),
+                  return const ProfileEmptyState(
+                    text: 'No gurus found yet for your interests.',
                   );
                 }
                 return ListView.separated(
@@ -994,10 +861,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // -------------------- Suggested Wellness --------------------
   Widget _buildSuggestedWellnessSection() {
-    // Assume: profileType == 'wellness'
+    // users collection standard field: accountType == 'wellness'
     Query<Map<String, dynamic>> query = _firestore
         .collection('users')
-        .where('profileType', isEqualTo: 'wellness');
+        .where('accountType', isEqualTo: 'wellness');
 
     if (_interests.isNotEmpty) {
       final List<String> topInterests = _interests.length > 5
@@ -1035,11 +902,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 }
                 final docs = snapshot.data?.docs ?? [];
                 if (docs.isEmpty) {
-                  return Text(
-                    'No wellness profiles yet. They will appear here.',
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                    ),
+                  return const ProfileEmptyState(
+                    text: 'No wellness profiles yet. They will appear here.',
                   );
                 }
                 return ListView.separated(
@@ -1121,10 +985,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // -------------------- Similar Aspirants --------------------
   Widget _buildSimilarAspirantsSection() {
-    // Assume: profileType == 'aspirant'
+    // users collection standard field: accountType == 'aspirant'
     Query<Map<String, dynamic>> query = _firestore
         .collection('users')
-        .where('profileType', isEqualTo: 'aspirant');
+        .where('accountType', isEqualTo: 'aspirant');
 
     if (_primaryCategory != null && _primaryCategory!.isNotEmpty) {
       query = query.where('primaryCategory', isEqualTo: _primaryCategory);
@@ -1354,25 +1218,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           const SizedBox(height: 10),
           if (_lastWorkouts.isEmpty && _isOwnProfile)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.star_border, size: 48, color: Colors.grey[400]),
-                    const SizedBox(height: 8),
-                    Text(
-                      'No activities yet. Add your first match, session or practice!',
-                      style: GoogleFonts.poppins(),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              ),
+            const ProfileEmptyStateRich(
+              text: 'No activities yet. Add your first match, session or practice!',
+              icon: Icons.star_border,
+              card: true,
             )
           else if (_lastWorkouts.isEmpty)
             const SizedBox.shrink()
@@ -1491,12 +1340,9 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             ),
             const SizedBox(height: 10),
             if (_eventsChallenges.isEmpty && _isOwnProfile)
-              Center(
-                child: Text(
-                  'No events yet. Add your first tournament, show or meetup!',
-                  style: GoogleFonts.poppins(color: Colors.white70),
-                  textAlign: TextAlign.center,
-                ),
+              const ProfileEmptyStateRich(
+                text: 'No events yet. Add your first tournament, show or meetup!',
+                textColor: Colors.white70,
               )
             else if (_eventsChallenges.isEmpty)
               const SizedBox.shrink()
@@ -1520,58 +1366,36 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildSocialLinksSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+    return ProfileSectionCard(
+      title: 'Social Links',
+      trailing: _isOwnProfile
+          ? TextButton.icon(
+              onPressed: () async {
+                final updated = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (ctx) => EditSocialLinksPage(
+                      initialLinks: _socialLinks,
+                    ),
+                  ),
+                );
+                if (updated != null) {
+                  setState(() {
+                    _socialLinks = Map<String, String>.from(updated);
+                  });
+                }
+              },
+              icon: const Icon(Icons.edit, size: 18),
+              label: const Text('Edit'),
+            )
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Social Links',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-              if (_isOwnProfile)
-                TextButton.icon(
-                  onPressed: () async {
-                    final updated = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (ctx) => EditSocialLinksPage(
-                          initialLinks: _socialLinks,
-                        ),
-                      ),
-                    );
-                    if (updated != null) {
-                      setState(() {
-                        _socialLinks = Map<String, String>.from(updated);
-                      });
-                      // Data is already saved to Firebase by EditSocialLinksPage
-                    }
-                  },
-                  icon: const Icon(Icons.edit, size: 18),
-                  label: const Text('Edit'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
           if (_socialLinks.isEmpty && _isOwnProfile)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Center(
-                child: Text(
-                  'No social links yet. Add your links!',
-                  style: GoogleFonts.poppins(),
-                ),
-              ),
+            const ProfileEmptyState(
+              text: 'No social links yet. Add your links!',
+              card: true,
             )
           else if (_socialLinks.isEmpty)
             const SizedBox.shrink()
@@ -2135,148 +1959,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   Widget _buildFitnessGoalsSection() {
     if (!_isOwnProfile) return const SizedBox.shrink();
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [_lavender.withOpacity(0.1), _deepLavender.withOpacity(0.05)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _lavender.withOpacity(0.3)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: _lavender,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(Icons.flag, color: Colors.white, size: 24),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Fitness Goals',
-                      style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
-                  onPressed: _addNewGoal,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (_fitnessGoals.isEmpty)
-              Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.flag_outlined, size: 48, color: Colors.grey[400]),
-                    const SizedBox(height: 8),
-                    Text(
-                      'No goals set yet',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ElevatedButton.icon(
-                      onPressed: _addNewGoal,
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('Set Your First Goal'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _lavender,
-                        foregroundColor: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else
-              ..._fitnessGoals.map((goal) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(Icons.fitness_center, color: _lavender, size: 20),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              goal,
-                              style: GoogleFonts.poppins(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 4),
-                            LinearProgressIndicator(
-                              value: 0.6, // Mock progress
-                              backgroundColor: Colors.grey[200],
-                              valueColor: AlwaysStoppedAnimation<Color>(_lavender),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (_isOwnProfile)
-                        PopupMenuButton<String>(
-                          icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
-                          onSelected: (value) {
-                            if (value == 'edit') {
-                              _editGoal(goal);
-                            } else if (value == 'delete') {
-                              _deleteGoal(goal);
-                            }
-                          },
-                          itemBuilder: (context) => [
-                            PopupMenuItem(value: 'edit', child: Text('Edit')),
-                            PopupMenuItem(value: 'delete', child: Text('Delete')),
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
-              )),
-          ],
-        ),
-      ),
+    return AspirantFitnessGoalsSection(
+      goals: _fitnessGoals,
+      onAddGoal: _addNewGoal,
+      onEditGoal: _editGoal,
+      onDeleteGoal: _deleteGoal,
+      accentColor: _lavender,
+      accentDarkColor: _deepLavender,
     );
   }
 
@@ -2641,126 +2330,29 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildRecentPostsGrid() {
-    // Private account handling (Instagram style)
-    if (_isPrivate && !_isFollowing && !_isOwnProfile) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16),
-        child: Text(
-          'This account is private.\nFollow to see their posts.',
-          style: GoogleFonts.poppins(),
-        ),
-      );
-    }
-
-    final userId = widget.profileUserId;
-    final postsQuery = FirebaseFirestore.instance
-        .collection('posts')
-        .where('userId', isEqualTo: userId)
-        .limit(30);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Recent Posts',
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
+    return AspirantRecentPostsGrid(
+      isPrivate: _isPrivate,
+      isFollowing: _isFollowing,
+      isOwnProfile: _isOwnProfile,
+      profileUserId: widget.profileUserId,
+      accentColor: _lavender,
+      imageResolver: _getPostImageUrl,
+      onTapPost: (postId) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (ctx) => PostDetailsPage(postId: postId),
           ),
-          const SizedBox(height: 12),
-          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: postsQuery.snapshots(),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return SizedBox(
-                  height: 120,
-                  child: Center(
-                    child: CircularProgressIndicator(color: _lavender),
-                  ),
-                );
-              }
-              final allDocs = snap.data?.docs ?? [];
-              final sortedDocs = List.from(allDocs)..sort((a, b) {
-                final aData = a.data() as Map<String, dynamic>?;
-                final bData = b.data() as Map<String, dynamic>?;
-                final aTs = aData?['timestamp'] ?? aData?['createdAt'];
-                final bTs = bData?['timestamp'] ?? bData?['createdAt'];
-                if (aTs == null) return 1;
-                if (bTs == null) return -1;
-                if (aTs is Timestamp && bTs is Timestamp) return bTs.compareTo(aTs);
-                return 0;
-              });
-              final docs = sortedDocs.take(12).toList();
-              if (docs.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: Text(
-                    'No posts yet',
-                    style: GoogleFonts.poppins(),
-                  ),
-                );
-              }
-              return GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: docs.length,
-                gridDelegate:
-                const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  crossAxisSpacing: 8,
-                  mainAxisSpacing: 8,
-                ),
-                itemBuilder: (context, idx) {
-                  final doc = docs[idx];
-                  final data = doc.data()! as Map<String, dynamic>;
-                  final imageUrl = _getPostImageUrl(data);
-                  return GestureDetector(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (ctx) => PostDetailsPage(postId: doc.id),
-                      ),
-                    ),
-                    child: Hero(
-                      tag: 'post-${doc.id}',
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          color: Colors.grey[200],
-                        ),
-                        clipBehavior: Clip.hardEdge,
-                        child: imageUrl != null && imageUrl.isNotEmpty
-                            ? Image.network(
-                          imageUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.image, color: Colors.grey)),
-                        )
-                            : const Center(child: Icon(Icons.image, color: Colors.grey)),
-                      ),
-                    ),
-                  );
-                },
-              );
-            },
+        );
+      },
+      onTapViewAll: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (ctx) => UserAllPostsPage(userId: widget.profileUserId),
           ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => UserAllPostsPage(userId: userId),
-                ),
-              ),
-              child: const Text('View All Posts →'),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -2887,179 +2479,15 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   SizedBox(height: _avatarOverlap + 18),
 
                   // Avatar + Name row (header)
-                  Padding(
-                    padding:
-                    const EdgeInsets.symmetric(horizontal: 20.0),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Transform.translate(
-                          offset: const Offset(0, -_avatarOverlap),
-                          child: _avatarWidget(),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Column(
-                              crossAxisAlignment:
-                              CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        _fullName.isNotEmpty
-                                            ? _fullName
-                                            : _username.isNotEmpty
-                                            ? '@$_username'
-                                            : 'No name',
-                                        style: GoogleFonts.poppins(
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    // Online status green dot
-                                    StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                                      stream: _firestore
-                                          .collection('users')
-                                          .doc(widget.profileUserId)
-                                          .snapshots(),
-                                      builder: (context, snapshot) {
-                                        if (snapshot.hasData) {
-                                          final data = snapshot.data
-                                              ?.data()
-                                          as Map<String, dynamic>?;
-                                          bool isOnline = false;
-
-                                          if (data?['isOnline'] ==
-                                              true) {
-                                            isOnline = true;
-                                          } else if (data?['lastSeen'] !=
-                                              null) {
-                                            final lastSeen = (data![
-                                            'lastSeen']
-                                            as Timestamp?)
-                                                ?.toDate();
-                                            if (lastSeen != null) {
-                                              isOnline = DateTime.now()
-                                                  .difference(
-                                                  lastSeen)
-                                                  .inMinutes <
-                                                  2;
-                                            }
-                                          }
-
-                                          return Container(
-                                            width: 10,
-                                            height: 10,
-                                            decoration: BoxDecoration(
-                                              color: isOnline
-                                                  ? Colors.green
-                                                  : Colors.grey,
-                                              shape: BoxShape.circle,
-                                              border: Border.all(
-                                                color: Colors.white,
-                                                width: 2,
-                                              ),
-                                            ),
-                                          );
-                                        }
-                                        return const SizedBox.shrink();
-                                      },
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _username.isNotEmpty
-                                      ? '@$_username'
-                                      : '',
-                                  style: GoogleFonts.poppins(),
-                                ),
-                                const SizedBox(height: 6),
-                                if (_interests.isNotEmpty) ...[
-                                  Wrap(
-                                    spacing: 4,
-                                    runSpacing: 4,
-                                    children: [
-                                      ..._interests
-                                          .take(3)
-                                          .map((interest) {
-                                        return Text(
-                                          interest,
-                                          style:
-                                          GoogleFonts.poppins(
-                                            fontSize: 12,
-                                          ),
-                                        );
-                                      }).toList(),
-                                      if (_interests.length > 3)
-                                        Text(
-                                          '+${_interests.length - 3}',
-                                          style:
-                                          GoogleFonts.poppins(
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                ] else if (_fitnessTag.isNotEmpty) ...[
-                                  Text(
-                                    _fitnessTag,
-                                    style: GoogleFonts.poppins(),
-                                  ),
-                                  const SizedBox(height: 4),
-                                ],
-                                Row(
-                                  children: [
-                                    if (_city.isNotEmpty) ...[
-                                      const SizedBox(width: 8),
-                                      Container(
-                                        width: 4,
-                                        height: 4,
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey[400],
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        _city,
-                                        style:
-                                        GoogleFonts.poppins(),
-                                      ),
-                                    ],
-                                    if (_age != null) ...[
-                                      const SizedBox(width: 8),
-                                      Container(
-                                        width: 4,
-                                        height: 4,
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey[400],
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        '${_age} yrs',
-                                        style:
-                                        GoogleFonts.poppins(),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                  AspirantIdentityBlock(
+                    avatar: _avatarWidget(),
+                    profileUserId: widget.profileUserId,
+                    fullName: _fullName,
+                    username: _username,
+                    interests: _interests,
+                    fitnessTag: _fitnessTag,
+                    city: _city,
+                    age: _age,
                   ),
 
                   const SizedBox(height: 14),

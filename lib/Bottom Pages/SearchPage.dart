@@ -50,9 +50,11 @@ class SubcategorySpec {
   final String displayName;
   final String? interestTerm;
   final String? specializationTerm;
+  final String emoji;
 
   const SubcategorySpec({
     required this.displayName,
+    required this.emoji,
     this.interestTerm,
     this.specializationTerm,
   });
@@ -90,38 +92,19 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kSecondaryColor,
     backgroundImage: 'assets/categories/physical_fitness.jpg',
     subcategorySpecs: [
-      SubcategorySpec(
-          displayName: 'Fitness',
-          interestTerm: 'fitness',
-          specializationTerm: 'General Fitness'),
-      SubcategorySpec(
-          displayName: 'Strength Training',
-          specializationTerm: 'Strength Training'),
-      SubcategorySpec(
-          displayName: 'Functional Training',
-          specializationTerm: 'Functional Training'),
-      SubcategorySpec(
-          displayName: 'CrossFit', specializationTerm: 'CrossFit'),
-      SubcategorySpec(
-          displayName: 'Calisthenics',
-          specializationTerm: 'Calisthenics'),
-      SubcategorySpec(
-          displayName: 'Bodybuilding',
-          specializationTerm: 'Bodybuilding'),
-      SubcategorySpec(
-          displayName: 'Posture Correction',
-          specializationTerm: 'Posture Correction'),
-      SubcategorySpec(
-          displayName: 'Flexibility & Mobility',
-          specializationTerm: 'Flexibility & Mobility'),
-      SubcategorySpec(
-          displayName: 'Sports Performance',
-          specializationTerm: 'Sports Performance'),
-      SubcategorySpec(
-          displayName: 'Injury Prevention',
-          specializationTerm: 'Injury Prevention'),
+      SubcategorySpec(displayName: 'Fitness', emoji: '🏋️', interestTerm: 'fitness', specializationTerm: 'General Fitness'),
+      SubcategorySpec(displayName: 'Strength Training', emoji: '💪', specializationTerm: 'Strength Training'),
+      SubcategorySpec(displayName: 'Functional Training', emoji: '🤸', specializationTerm: 'Functional Training'),
+      SubcategorySpec(displayName: 'CrossFit', emoji: '🔥', specializationTerm: 'CrossFit'),
+      SubcategorySpec(displayName: 'Calisthenics', emoji: '🏃', specializationTerm: 'Calisthenics'),
+      SubcategorySpec(displayName: 'Bodybuilding', emoji: '🦾', specializationTerm: 'Bodybuilding'),
+      SubcategorySpec(displayName: 'Posture Correction', emoji: '🧍', specializationTerm: 'Posture Correction'),
+      SubcategorySpec(displayName: 'Flexibility & Mobility', emoji: '🤸‍♀️', specializationTerm: 'Flexibility & Mobility'),
+      SubcategorySpec(displayName: 'Sports Performance', emoji: '⚡', specializationTerm: 'Sports Performance'),
+      SubcategorySpec(displayName: 'Injury Prevention', emoji: '🩹', specializationTerm: 'Injury Prevention'),
     ],
   ),
+
   WellnessCategory(
     name: 'Nutrition & Diet',
     emoji: '🥗',
@@ -130,21 +113,13 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kPrimaryColor,
     backgroundImage: 'assets/categories/nutrition_diet.jpg',
     subcategorySpecs: [
-      SubcategorySpec(
-          displayName: 'Nutrition',
-          interestTerm: 'nutrition',
-          specializationTerm: 'Nutrition Planning'),
-      SubcategorySpec(
-          displayName: 'Weight Loss',
-          specializationTerm: 'Weight Loss'),
-      SubcategorySpec(
-          displayName: 'Muscle Gain',
-          specializationTerm: 'Muscle Gain'),
-      SubcategorySpec(
-          displayName: 'Diet',
-          specializationTerm: 'Nutrition Planning'),
+      SubcategorySpec(displayName: 'Nutrition', emoji: '🥗', interestTerm: 'nutrition', specializationTerm: 'Nutrition Planning'),
+      SubcategorySpec(displayName: 'Weight Loss', emoji: '⚖️', specializationTerm: 'Weight Loss'),
+      SubcategorySpec(displayName: 'Muscle Gain', emoji: '💥', specializationTerm: 'Muscle Gain'),
+      SubcategorySpec(displayName: 'Diet', emoji: '🍽️', specializationTerm: 'Nutrition Planning'),
     ],
   ),
+
   WellnessCategory(
     name: 'Mind & Body Wellness',
     emoji: '🧘',
@@ -153,24 +128,14 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kSecondaryColor,
     backgroundImage: 'assets/categories/mind_body.jpg',
     subcategorySpecs: [
-      SubcategorySpec(
-          displayName: 'Yoga',
-          interestTerm: 'yoga',
-          specializationTerm: 'Yoga & Breathwork'),
-      SubcategorySpec(
-          displayName: 'Mental Health',
-          interestTerm: 'mental_health'),
-      SubcategorySpec(
-          displayName: 'Stress Management',
-          specializationTerm: 'Stress Management'),
-      SubcategorySpec(
-          displayName: 'Mindfulness / Meditation',
-          interestTerm: 'mental_health'),
-      SubcategorySpec(
-          displayName: 'Holistic Wellness',
-          specializationTerm: 'Holistic Wellness'),
+      SubcategorySpec(displayName: 'Yoga', emoji: '🧘', interestTerm: 'yoga', specializationTerm: 'Yoga & Breathwork'),
+      SubcategorySpec(displayName: 'Mental Health', emoji: '🧠', interestTerm: 'mental_health'),
+      SubcategorySpec(displayName: 'Stress Management', emoji: '😌', specializationTerm: 'Stress Management'),
+      SubcategorySpec(displayName: 'Mindfulness / Meditation', emoji: '🌿', interestTerm: 'mental_health'),
+      SubcategorySpec(displayName: 'Holistic Wellness', emoji: '✨', specializationTerm: 'Holistic Wellness'),
     ],
   ),
+
   WellnessCategory(
     name: 'Rehabilitation & Recovery',
     emoji: '🏥',
@@ -179,20 +144,13 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kPrimaryColor,
     backgroundImage: 'assets/categories/rehab_recovery.jpg',
     subcategorySpecs: [
-      SubcategorySpec(
-          displayName: 'Rehab & Recovery',
-          specializationTerm: 'Rehab & Recovery'),
-      SubcategorySpec(
-          displayName: 'Pain Management',
-          specializationTerm: 'Pain Management'),
-      SubcategorySpec(
-          displayName: 'Injury Prevention',
-          specializationTerm: 'Injury Prevention'),
-      SubcategorySpec(
-          displayName: 'Posture Correction',
-          specializationTerm: 'Posture Correction'),
+      SubcategorySpec(displayName: 'Rehab & Recovery', emoji: '🏥', specializationTerm: 'Rehab & Recovery'),
+      SubcategorySpec(displayName: 'Pain Management', emoji: '💆', specializationTerm: 'Pain Management'),
+      SubcategorySpec(displayName: 'Injury Prevention', emoji: '🩹', specializationTerm: 'Injury Prevention'),
+      SubcategorySpec(displayName: 'Posture Correction', emoji: '🧍', specializationTerm: 'Posture Correction'),
     ],
   ),
+
   WellnessCategory(
     name: 'Lifestyle & General',
     emoji: '✨',
@@ -201,20 +159,13 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kSecondaryColor,
     backgroundImage: 'assets/categories/lifestyle_wellness.jpg',
     subcategorySpecs: [
-      SubcategorySpec(
-          displayName: 'Productivity',
-          interestTerm: 'productivity'),
-      SubcategorySpec(
-          displayName: 'Wellness Coach',
-          specializationTerm: 'Wellness Coach'),
-      SubcategorySpec(
-          displayName: 'Mobility Specialist',
-          specializationTerm: 'Mobility Specialist'),
-      SubcategorySpec(
-          displayName: 'Personal Trainer',
-          specializationTerm: 'Personal Trainer'),
+      SubcategorySpec(displayName: 'Productivity', emoji: '📈', interestTerm: 'productivity'),
+      SubcategorySpec(displayName: 'Wellness Coach', emoji: '🌟', specializationTerm: 'Wellness Coach'),
+      SubcategorySpec(displayName: 'Mobility Specialist', emoji: '🤸', specializationTerm: 'Mobility Specialist'),
+      SubcategorySpec(displayName: 'Personal Trainer', emoji: '🏋️', specializationTerm: 'Personal Trainer'),
     ],
   ),
+
   WellnessCategory(
     name: 'Other Interests',
     emoji: '🎯',
@@ -223,14 +174,10 @@ const List<WellnessCategory> _allCategories = [
     accentColor: kPrimaryColor,
     backgroundImage: 'assets/categories/goals.jpg',
     subcategorySpecs: [
-      SubcategorySpec(
-          displayName: 'Music', interestTerm: 'music'),
-      SubcategorySpec(
-          displayName: 'Reading', interestTerm: 'reading'),
-      SubcategorySpec(
-          displayName: 'Travel', interestTerm: 'travel'),
-      SubcategorySpec(
-          displayName: 'Other', specializationTerm: 'Other'),
+      SubcategorySpec(displayName: 'Music', emoji: '🎵', interestTerm: 'music'),
+      SubcategorySpec(displayName: 'Reading', emoji: '📚', interestTerm: 'reading'),
+      SubcategorySpec(displayName: 'Travel', emoji: '✈️', interestTerm: 'travel'),
+      SubcategorySpec(displayName: 'Other', emoji: '🎯', specializationTerm: 'Other'),
     ],
   ),
 ];
@@ -1759,7 +1706,7 @@ class SubCategoryPage extends StatelessWidget {
                   category.backgroundColor,
                   shape: BoxShape.circle,
                 ),
-                child: Text(category.emoji,
+                child: Text(spec.emoji,
                     style: const TextStyle(fontSize: 18)),
               ),
               title: Text(
@@ -1779,7 +1726,7 @@ class SubCategoryPage extends StatelessWidget {
                   MaterialPageRoute(
                     builder: (_) => ExpertsListPage(
                       displayName: spec.displayName,
-                      emoji: category.emoji,
+                      emoji: spec.emoji,
                       interestTerm: spec.interestTerm,
                       specializationTerm:
                       spec.specializationTerm,
