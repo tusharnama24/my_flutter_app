@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:halo/Bottom Pages/HomePage.dart';
 import 'package:halo/Category/categorypage.dart';
 import 'package:halo/forgotpasswordpage.dart';
@@ -23,10 +25,6 @@ const Color kDarkBackgroundBottom = Color(0xFF050505);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-  await loadAppThemeMode();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       systemNavigationBarColor: Colors.white,
@@ -35,15 +33,44 @@ void main() async {
       statusBarIconBrightness: Brightness.dark,
     ),
   );
+  unawaited(loadAppThemeMode());
   runApp(const ProviderScope(child: _AppRoot()));
 }
 
-class _AppRoot extends StatelessWidget {
+class _AppRoot extends StatefulWidget {
   const _AppRoot({super.key});
 
   @override
+  State<_AppRoot> createState() => _AppRootState();
+}
+
+class _AppRootState extends State<_AppRoot> {
+  late final Future<FirebaseApp> _firebaseInit;
+
+  @override
+  void initState() {
+    super.initState();
+    _firebaseInit = Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MyApp();
+    return FutureBuilder<FirebaseApp>(
+      future: _firebaseInit,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const MaterialApp(
+            debugShowCheckedModeBanner: false,
+            home: Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+        return MyApp();
+      },
+    );
   }
 }
 
@@ -192,15 +219,27 @@ class AuthGate extends StatelessWidget {
 class StartupRouter extends StatelessWidget {
   const StartupRouter({super.key});
 
-  Future<bool> _interestsCompleted() async {
+  static Future<bool>? _cachedInterestsFuture;
+  static String? _cachedUserId;
+
+  static Future<bool> _interestsCompleted() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool('interests_completed') ?? false;
   }
 
+  static void resetCache() {
+    _cachedInterestsFuture = null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (_cachedUserId != currentUid) {
+      _cachedUserId = currentUid;
+      _cachedInterestsFuture = null;
+    }
     return FutureBuilder<bool>(
-      future: _interestsCompleted(),
+      future: _cachedInterestsFuture ??= _interestsCompleted(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Scaffold(
@@ -451,6 +490,7 @@ Last updated: ${DateTime.now().year}''',
         await prefs.setBool('interests_completed', true);
       }
     } catch (_) {}
+    StartupRouter.resetCache();
 
     // ✅ DO NOTHING HERE — AuthGate stream will automatically
     // detect the login and rebuild with StartupRouter → HomePage

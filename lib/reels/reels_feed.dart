@@ -1,9 +1,58 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:video_player/video_player.dart';
-import 'package:halo/services/reel_service.dart';
 
-/// Full-screen vertical reels feed ranked by virality score.
+/// ================= CONTROLLER POOL =================
+class VideoControllerPool {
+  final int maxSize;
+  final _map = <String, VideoPlayerController>{};
+
+  VideoControllerPool({this.maxSize = 4});
+
+  Future<VideoPlayerController> get(String url) async {
+    if (_map.containsKey(url)) return _map[url]!;
+
+    if (_map.length >= maxSize) {
+      final key = _map.keys.first;
+      await _map[key]!.dispose();
+      _map.remove(key);
+    }
+
+    final c = VideoPlayerController.networkUrl(Uri.parse(url));
+    await c.initialize();
+    c.setLooping(true);
+
+    _map[url] = c;
+    return c;
+  }
+
+  void disposeAll() {
+    for (var c in _map.values) {
+      c.dispose();
+    }
+    _map.clear();
+  }
+}
+
+/// ================= USER CACHE =================
+class UserCache {
+  static final _cache = <String, String>{};
+
+  static Future<String> getName(String userId) async {
+    if (_cache.containsKey(userId)) return _cache[userId]!;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .get();
+
+    final name = doc.data()?['username'] ?? "User";
+    _cache[userId] = name;
+    return name;
+  }
+}
+
+/// ================= MAIN FEED =================
 class ReelsFeed extends StatefulWidget {
   const ReelsFeed({super.key});
 
@@ -12,67 +61,79 @@ class ReelsFeed extends StatefulWidget {
 }
 
 class _ReelsFeedState extends State<ReelsFeed> {
-  final ReelService _reelService = ReelService();
   final PageController _pageController = PageController();
+  final VideoControllerPool _pool = VideoControllerPool();
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> reels = [];
+  int currentIndex = 0;
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadReels();
+  }
+
+  Future<void> _loadReels() async {
+    final snap = await FirebaseFirestore.instance
+        .collection('reels')
+        .orderBy('createdAt', descending: true)
+        .limit(10) // pagination
+        .get();
+
+    setState(() {
+      reels = snap.docs;
+      loading = false;
+    });
+
+    _preload(0);
+  }
+
+  void _preload(int index) {
+    for (int i = index - 1; i <= index + 1; i++) {
+      if (i >= 0 && i < reels.length) {
+        final url = reels[i]['videoUrl'];
+        _pool.get(url);
+      }
+    }
+  }
 
   @override
   void dispose() {
+    _pool.disposeAll();
     _pageController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (loading) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+            child: CircularProgressIndicator(color: Colors.white)),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
-      body: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-        stream: _reelService.getRankedReelsStream(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: Colors.white),
-            );
-          }
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                'Error: ${snapshot.error}',
-                style: const TextStyle(color: Colors.white),
-              ),
-            );
-          }
+      body: PageView.builder(
+        controller: _pageController,
+        scrollDirection: Axis.vertical,
+        itemCount: reels.length,
+        onPageChanged: (i) {
+          setState(() => currentIndex = i);
+          _preload(i);
+        },
+        itemBuilder: (context, index) {
+          final data = reels[index].data();
 
-          final reels = snapshot.data ?? [];
-          if (reels.isEmpty) {
-            return const Center(
-              child: Text(
-                'No reels yet',
-                style: TextStyle(color: Colors.white54, fontSize: 16),
-              ),
-            );
-          }
-
-          return PageView.builder(
-            controller: _pageController,
-            scrollDirection: Axis.vertical,
-            itemCount: reels.length,
-            itemBuilder: (context, index) {
-              final doc = reels[index];
-              final data = doc.data();
-              final videoUrl = (data['videoUrl'] ?? data['url'] ?? data['mediaUrl'] ?? '')
-                  .toString()
-                  .trim();
-              final caption = (data['caption'] ?? '').toString();
-              final userId = (data['userId'] ?? '').toString();
-
-              return _ReelPage(
-                reelId: doc.id,
-                videoUrl: videoUrl,
-                caption: caption,
-                userId: userId,
-                data: data,
-              );
-            },
+          return ReelItem(
+            isActive: index == currentIndex,
+            pool: _pool,
+            videoUrl: data['videoUrl'],
+            caption: data['caption'] ?? '',
+            userId: data['userId'] ?? '',
           );
         },
       ),
@@ -80,140 +141,200 @@ class _ReelsFeedState extends State<ReelsFeed> {
   }
 }
 
-class _ReelPage extends StatefulWidget {
-  final String reelId;
+/// ================= REEL ITEM =================
+class ReelItem extends StatefulWidget {
+  final bool isActive;
   final String videoUrl;
   final String caption;
   final String userId;
-  final Map<String, dynamic> data;
+  final VideoControllerPool pool;
 
-  const _ReelPage({
-    required this.reelId,
+  const ReelItem({
+    super.key,
+    required this.isActive,
     required this.videoUrl,
     required this.caption,
     required this.userId,
-    required this.data,
+    required this.pool,
   });
 
   @override
-  State<_ReelPage> createState() => _ReelPageState();
+  State<ReelItem> createState() => _ReelItemState();
 }
 
-class _ReelPageState extends State<_ReelPage> {
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (widget.videoUrl.isNotEmpty)
-          _ReelVideoPlayer(url: widget.videoUrl)
-        else
-          const Center(
-            child: Icon(Icons.videocam_off, color: Colors.white38, size: 64),
-          ),
-        Positioned(
-          left: 12,
-          right: 12,
-          bottom: 80,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (widget.userId.isNotEmpty)
-                FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                  future: FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(widget.userId)
-                      .get(),
-                  builder: (context, snap) {
-                    final name = snap.hasData && snap.data!.exists
-                        ? (snap.data!.data()?['username'] ??
-                            snap.data!.data()?['name'] ??
-                            snap.data!.data()?['full_name'] ??
-                            'User')
-                        : 'User';
-                    return Text(
-                      name,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 16,
-                      ),
-                    );
-                  },
-                ),
-              if (widget.caption.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  widget.caption,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ReelVideoPlayer extends StatefulWidget {
-  final String url;
-
-  const _ReelVideoPlayer({required this.url});
-
-  @override
-  State<_ReelVideoPlayer> createState() => _ReelVideoPlayerState();
-}
-
-class _ReelVideoPlayerState extends State<_ReelVideoPlayer> {
+class _ReelItemState extends State<ReelItem> {
   VideoPlayerController? _controller;
-  bool _initialized = false;
-  bool _error = false;
+  bool liked = false;
+  bool showHeart = false;
+  bool showPlay = false;
+  String username = "";
 
   @override
   void initState() {
     super.initState();
-    if (widget.url.isEmpty) {
-      setState(() => _error = true);
-      return;
-    }
-    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url))
-      ..initialize().then((_) {
-        if (!mounted) return;
-        _controller!..setLooping(true)..play();
-        setState(() => _initialized = true);
-      }).catchError((_) {
-        if (!mounted) return;
-        setState(() => _error = true);
-      });
+    _init();
+  }
+
+  Future<void> _init() async {
+    _controller = await widget.pool.get(widget.videoUrl);
+    if (widget.isActive) _controller!.play();
+
+    username = await UserCache.getName(widget.userId);
+
+    if (mounted) setState(() {});
   }
 
   @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
+  void didUpdateWidget(covariant ReelItem oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    /// URL guard
+    if (oldWidget.videoUrl != widget.videoUrl) {
+      _init();
+      return;
+    }
+
+    if (widget.isActive) {
+      _controller?.play();
+    } else {
+      _controller?.pause();
+    }
+  }
+
+  void _togglePlay() {
+    if (_controller == null) return;
+
+    if (_controller!.value.isPlaying) {
+      _controller!.pause();
+      showPlay = true;
+    } else {
+      _controller!.play();
+      showPlay = false;
+    }
+    setState(() {});
+  }
+
+  void _doubleTap() {
+    liked = true;
+    showHeart = true;
+
+    setState(() {});
+
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (mounted) {
+        showHeart = false;
+        setState(() {});
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_error) {
+    if (_controller == null || !_controller!.value.isInitialized) {
       return const Center(
-        child: Icon(Icons.videocam_off, color: Colors.white38, size: 64),
-      );
+          child: CircularProgressIndicator(color: Colors.white));
     }
-    if (!_initialized || _controller == null || !_controller!.value.isInitialized) {
-      return const Center(child: CircularProgressIndicator(color: Colors.white54));
-    }
-    final c = _controller!;
-    return FittedBox(
-      fit: BoxFit.cover,
-      child: SizedBox(
-        width: c.value.size.width,
-        height: c.value.size.height,
-        child: VideoPlayer(c),
+
+    final isBuffering = _controller!.value.isBuffering;
+
+    return GestureDetector(
+      onTap: _togglePlay,
+      onDoubleTap: _doubleTap,
+      child: Stack(
+        children: [
+          /// VIDEO
+          SizedBox.expand(
+            child: FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: _controller!.value.size.width,
+                height: _controller!.value.size.height,
+                child: VideoPlayer(_controller!),
+              ),
+            ),
+          ),
+
+          /// BUFFERING
+          if (isBuffering)
+            const Center(
+                child: CircularProgressIndicator(color: Colors.white)),
+
+          /// PLAY ICON
+          if (showPlay)
+            const Center(
+              child: Icon(Icons.play_arrow,
+                  size: 80, color: Colors.white),
+            ),
+
+          /// HEART
+          if (showHeart)
+            const Center(
+              child:
+              Icon(Icons.favorite, size: 100, color: Colors.white),
+            ),
+
+          /// GRADIENT
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  Colors.transparent,
+                  Colors.black.withOpacity(0.8)
+                ],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+            ),
+          ),
+
+          /// RIGHT SIDE BUTTONS
+          Positioned(
+            right: 10,
+            bottom: 100,
+            child: Column(
+              children: [
+                IconButton(
+                  icon: Icon(Icons.favorite,
+                      color: liked ? Colors.red : Colors.white,
+                      size: 30),
+                  onPressed: () {
+                    setState(() => liked = !liked);
+                  },
+                ),
+                const SizedBox(height: 16),
+                const Icon(Icons.comment,
+                    color: Colors.white, size: 28),
+                const SizedBox(height: 16),
+                const Icon(Icons.share,
+                    color: Colors.white, size: 28),
+              ],
+            ),
+          ),
+
+          /// USER + CAPTION
+          Positioned(
+            left: 12,
+            bottom: 40,
+            right: 80,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("@$username",
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold)),
+
+                const SizedBox(height: 6),
+
+                Text(widget.caption,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                    const TextStyle(color: Colors.white)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -29,6 +29,7 @@ import 'package:halo/utils/search_utils.dart';
 import 'package:halo/services/follow_service.dart';
 import 'package:halo/widgets/follow_button.dart';
 import 'package:halo/widgets/stats_widget.dart';
+import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_identity_block.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_recent_posts_grid.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_action_row.dart';
@@ -324,7 +325,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     final XFile? picked =
     await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
-    setState(() => _profilePhotoFile = File(picked.path));
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      imagePath: picked.path,
+      outputNamePrefix: 'profile',
+    );
+    if (edited == null) return;
+    setState(() => _profilePhotoFile = edited);
     await _uploadAndSaveProfilePhoto(_profilePhotoFile!, isCover: false);
   }
 
@@ -333,8 +340,43 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     final XFile? picked =
     await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
-    setState(() => _coverPhotoFile = File(picked.path));
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      imagePath: picked.path,
+      outputNamePrefix: 'cover',
+    );
+    if (edited == null) return;
+    setState(() => _coverPhotoFile = edited);
     await _uploadAndSaveProfilePhoto(_coverPhotoFile!, isCover: true);
+  }
+
+  void _previewCoverImage() {
+    if (_coverPhotoFile == null && (_coverPhotoUrl == null || _coverPhotoUrl!.isEmpty)) {
+      return;
+    }
+    final ImageProvider<Object> provider = _coverPhotoFile != null
+        ? FileImage(_coverPhotoFile!)
+        : NetworkImage(_coverPhotoUrl!);
+    openProfileMediaPreview(
+      context,
+      image: provider,
+      heroTag: 'aspirant-cover-${widget.profileUserId}',
+    );
+  }
+
+  void _previewProfileImage() {
+    if (_profilePhotoFile == null &&
+        (_profilePhotoUrl == null || _profilePhotoUrl!.isEmpty)) {
+      return;
+    }
+    final ImageProvider<Object> provider = _profilePhotoFile != null
+        ? FileImage(_profilePhotoFile!)
+        : NetworkImage(_profilePhotoUrl!);
+    openProfileMediaPreview(
+      context,
+      image: provider,
+      heroTag: 'profile-avatar-${widget.profileUserId}',
+    );
   }
 
   Future<void> _uploadAndSaveProfilePhoto(File file,
@@ -565,13 +607,17 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         : const AssetImage('assets/images/bio.png')) as ImageProvider;
 
     return GestureDetector(
-      onTap: _isOwnProfile ? _pickCoverImage : null,
+      onTap: _isOwnProfile ? _pickCoverImage : _previewCoverImage,
+      onLongPress: _previewCoverImage,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Container(
-            decoration: BoxDecoration(
-              image: DecorationImage(image: cover, fit: BoxFit.cover),
+          Hero(
+            tag: 'aspirant-cover-${widget.profileUserId}',
+            child: Container(
+              decoration: BoxDecoration(
+                image: DecorationImage(image: cover, fit: BoxFit.cover),
+              ),
             ),
           ),
           Container(
@@ -598,7 +644,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     return Hero(
       tag: 'profile-avatar-${widget.profileUserId}',
       child: GestureDetector(
-        onTap: _isOwnProfile ? _pickProfileImage : null,
+        onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
+        onLongPress: _previewProfileImage,
         child: Container(
           width: _avatarSize + 6,
           height: _avatarSize + 6,

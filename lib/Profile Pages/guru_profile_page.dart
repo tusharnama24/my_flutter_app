@@ -25,6 +25,7 @@ import 'package:halo/chat/chat_service.dart';
 import 'package:halo/services/follow_service.dart';
 import 'package:halo/widgets/follow_button.dart';
 import 'package:halo/widgets/stats_widget.dart';
+import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_identity_block.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_recent_posts_section.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_action_row.dart';
@@ -719,7 +720,13 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     final XFile? picked =
     await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
-    setState(() => _profilePhotoFile = File(picked.path));
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      imagePath: picked.path,
+      outputNamePrefix: 'profile',
+    );
+    if (edited == null) return;
+    setState(() => _profilePhotoFile = edited);
     await _uploadAndSavePhoto(_profilePhotoFile!, isCover: false);
   }
 
@@ -728,8 +735,43 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     final XFile? picked =
     await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
-    setState(() => _coverPhotoFile = File(picked.path));
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      imagePath: picked.path,
+      outputNamePrefix: 'cover',
+    );
+    if (edited == null) return;
+    setState(() => _coverPhotoFile = edited);
     await _uploadAndSavePhoto(_coverPhotoFile!, isCover: true);
+  }
+
+  void _previewCoverImage() {
+    if (_coverPhotoFile == null && (_coverPhotoUrl == null || _coverPhotoUrl!.isEmpty)) {
+      return;
+    }
+    final ImageProvider<Object> provider = _coverPhotoFile != null
+        ? FileImage(_coverPhotoFile!)
+        : NetworkImage(_coverPhotoUrl!);
+    openProfileMediaPreview(
+      context,
+      image: provider,
+      heroTag: 'guru-cover-${widget.profileUserId}',
+    );
+  }
+
+  void _previewProfileImage() {
+    if (_profilePhotoFile == null &&
+        (_profilePhotoUrl == null || _profilePhotoUrl!.isEmpty)) {
+      return;
+    }
+    final ImageProvider<Object> provider = _profilePhotoFile != null
+        ? FileImage(_profilePhotoFile!)
+        : NetworkImage(_profilePhotoUrl!);
+    openProfileMediaPreview(
+      context,
+      image: provider,
+      heroTag: 'guru-avatar-${widget.profileUserId}',
+    );
   }
 
   Future<void> _uploadAndSavePhoto(File file, {required bool isCover}) async {
@@ -884,60 +926,27 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   // ===================================================================
   Future<void> _handleManageSlots() async {
     if (!_isOwnProfile || _currentUser == null) return;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Manage Booking Slots',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Current Settings:',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              Text('Base Price: ₹${_bookingSettings['basePrice'] ?? 'Not set'}'),
-              Text('Duration: ${_bookingSettings['duration'] ?? 60} min'),
-              Text('Online: ${_bookingSettings['online'] == true ? 'Yes' : 'No'}'),
-              Text('Offline: ${_bookingSettings['offline'] == true ? 'Yes' : 'No'}'),
-              const SizedBox(height: 16),
-              const Text(
-                'Full booking management feature coming soon! You will be able to set your availability, pricing, and manage all your slots here.',
-                style: TextStyle(fontSize: 12),
-              ),
-            ],
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          backgroundColor: _bg,
+          appBar: AppBar(
+            title: const Text('Booking Management'),
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            elevation: 0,
+          ),
+          body: SingleChildScrollView(
+            child: GuruBookingSection(
+              guruid: _currentUser!.uid,
+              isOwnProfile: true,
+              bookingSettings: _bookingSettings,
+              upcomingSessions: _upcomingSessions,
+              pastSessions: _pastSessions,
+            ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => GuruBookingSection(
-                    guruid: _currentUser!.uid,
-                    isOwnProfile: true,
-                    bookingSettings: _bookingSettings,
-                    upcomingSessions: _upcomingSessions,
-                    pastSessions: _pastSessions,
-                  ),
-                ),
-              );
-            },
-            child: const Text('Edit Settings'),
-          ),
-        ],
       ),
     );
   }
@@ -950,189 +959,79 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       return;
     }
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Book a Session',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Guru: $_fullName'),
-            const SizedBox(height: 8),
-            Text(
-                'Starting from: ₹${_bookingSettings['basePrice'] ?? 'Contact for pricing'}'),
-            Text('Duration: ${_bookingSettings['duration'] ?? 60} min'),
-            const SizedBox(height: 16),
-            const Text(
-              'Booking feature coming soon! You will be able to select a time slot and book a session.',
-              style: TextStyle(fontSize: 12),
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          backgroundColor: _bg,
+          appBar: AppBar(
+            title: Text('Book with $_fullName'),
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            elevation: 0,
+          ),
+          body: SingleChildScrollView(
+            child: GuruBookingSection(
+              guruid: widget.profileUserId,
+              isOwnProfile: false,
+              bookingSettings: _bookingSettings,
+              upcomingSessions: _upcomingSessions,
+              pastSessions: _pastSessions,
             ),
-          ],
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => GuruBookingSection(
-                    guruid: widget.profileUserId,
-                    isOwnProfile: false,
-                    bookingSettings: _bookingSettings,
-                    upcomingSessions: _upcomingSessions,
-                    pastSessions: _pastSessions,
-                  ),
-                ),
-              );
-            },
-            child: const Text('Continue'),
-          ),
-        ],
       ),
     );
   }
 
   Future<void> _handleManageClasses() async {
     if (!_isOwnProfile || _currentUser == null) return;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Manage Classes & Batches',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Active Classes: ${_classes.length}'),
-            const SizedBox(height: 16),
-            const Text(
-              'Class management feature coming soon! You will be able to create, edit, and manage your batches here.',
-              style: TextStyle(fontSize: 12),
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          backgroundColor: _bg,
+          appBar: AppBar(
+            title: const Text('Classes & Batches'),
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            elevation: 0,
+          ),
+          body: SingleChildScrollView(
+            child: GuruClassesSection(
+              guruid: _currentUser!.uid,
+              isOwnProfile: true,
+              classes: _classes,
+              specialties: _specialties,
             ),
-          ],
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => GuruClassesSection(
-                    guruid: _currentUser!.uid,
-                    isOwnProfile: true,
-                    classes: _classes,
-                    specialties: _specialties,
-                  ),
-                ),
-              );
-            },
-            child: const Text('Create New Class'),
-          ),
-        ],
       ),
     );
   }
 
   Future<void> _handleViewPayoutDetails() async {
     if (!_isOwnProfile || _currentUser == null) return;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Payout Details',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildPayoutRow('Total Earnings', '₹${_earningsSummary['total'] ?? 0}'),
-              _buildPayoutRow('This Month', '₹${_earningsSummary['thisMonth'] ?? 0}'),
-              _buildPayoutRow('Pending', '₹${_earningsSummary['pending'] ?? 0}'),
-              const Divider(),
-              const SizedBox(height: 8),
-              const Text(
-                'Recent Transactions:',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              if (_recentEarnings.isEmpty)
-                const Text(
-                  'No transactions yet.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                )
-              else
-                ..._recentEarnings.take(5).map((e) => Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          e['label']?.toString() ?? 'Session',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
-                      Text(
-                        '₹${e['amount'] ?? 0}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                )),
-              const SizedBox(height: 16),
-              const Text(
-                'Withdrawal options and bank details management coming soon!',
-                style: TextStyle(fontSize: 11, color: Colors.grey),
-              ),
-            ],
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          backgroundColor: _bg,
+          appBar: AppBar(
+            title: const Text('Earnings Overview'),
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            elevation: 0,
+          ),
+          body: SingleChildScrollView(
+            child: GuruEarningsSection(
+              guruid: _currentUser!.uid,
+              isOwnProfile: true,
+              earningsSummary: _earningsSummary,
+              recentEarnings: _recentEarnings,
+            ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => GuruEarningsSection(
-                    guruid: _currentUser!.uid,
-                    isOwnProfile: true,
-                    earningsSummary: _earningsSummary,
-                    recentEarnings: _recentEarnings,
-                  ),
-                ),
-              );
-            },
-            child: const Text('View All'),
-          ),
-        ],
       ),
     );
   }
@@ -1217,13 +1116,17 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         : const AssetImage('assets/images/bio.png')) as ImageProvider;
 
     return GestureDetector(
-      onTap: _isOwnProfile ? _pickCoverImage : null,
+      onTap: _isOwnProfile ? _pickCoverImage : _previewCoverImage,
+      onLongPress: _previewCoverImage,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Container(
-            decoration: BoxDecoration(
-              image: DecorationImage(image: cover, fit: BoxFit.cover),
+          Hero(
+            tag: 'guru-cover-${widget.profileUserId}',
+            child: Container(
+              decoration: BoxDecoration(
+                image: DecorationImage(image: cover, fit: BoxFit.cover),
+              ),
             ),
           ),
           Container(
@@ -1250,7 +1153,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     return Hero(
       tag: 'guru-avatar-${widget.profileUserId}',
       child: GestureDetector(
-        onTap: _isOwnProfile ? _pickProfileImage : null,
+        onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
+        onLongPress: _previewProfileImage,
         child: Container(
           width: _avatarSize + 6,
           height: _avatarSize + 6,
@@ -1422,6 +1326,37 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 expandedHeight: _coverHeight,
                 backgroundColor: _lavender,
                 elevation: 0,
+                bottom: PreferredSize(
+                  preferredSize: const Size.fromHeight(58),
+                  child: Container(
+                    color: Colors.white,
+                    child: TabBar(
+                      controller: _tabController,
+                      indicatorColor: _lavender,
+                      indicatorWeight: 3,
+                      labelColor: Colors.black87,
+                      unselectedLabelColor: Colors.black54,
+                      labelStyle: GoogleFonts.poppins(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      unselectedLabelStyle: GoogleFonts.poppins(
+                        fontSize: 14,
+                        fontWeight: FontWeight.normal,
+                      ),
+                      tabs: const [
+                        Tab(
+                          icon: Icon(Icons.grid_on_outlined, size: 20),
+                          text: 'Profile',
+                        ),
+                        Tab(
+                          icon: Icon(Icons.dashboard_outlined, size: 20),
+                          text: 'Business',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
                 leading: IconButton(
                   icon: const Icon(Icons.arrow_back),
                   onPressed: () => Navigator.pop(context),
@@ -1504,36 +1439,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               ),
               SliverToBoxAdapter(
                 child: _buildProfileHeaderSection(),
-              ),
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _SliverAppBarDelegate(
-                  TabBar(
-                    controller: _tabController,
-                    indicatorColor: _lavender,
-                    indicatorWeight: 3,
-                    labelColor: Colors.black87,
-                    unselectedLabelColor: Colors.black54,
-                    labelStyle: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    unselectedLabelStyle: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.normal,
-                    ),
-                    tabs: const [
-                      Tab(
-                        icon: Icon(Icons.grid_on_outlined, size: 20),
-                        text: 'Profile',
-                      ),
-                      Tab(
-                        icon: Icon(Icons.dashboard_outlined, size: 20),
-                        text: 'Business',
-                      ),
-                    ],
-                  ),
-                ),
               ),
             ];
           },

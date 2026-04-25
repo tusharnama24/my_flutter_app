@@ -29,6 +29,7 @@ import 'package:halo/newpostpage.dart';
 import 'package:halo/services/follow_service.dart';
 import 'package:halo/widgets/follow_button.dart';
 import 'package:halo/widgets/stats_widget.dart';
+import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/wellness/wellness_identity_block.dart';
 import 'package:halo/screens/profile/widgets/wellness/wellness_recent_posts_section.dart';
 import 'package:halo/screens/profile/widgets/wellness/wellness_action_row.dart';
@@ -426,7 +427,13 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
 
-    setState(() => _profilePhotoFile = File(picked.path));
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      imagePath: picked.path,
+      outputNamePrefix: 'profile',
+    );
+    if (edited == null) return;
+    setState(() => _profilePhotoFile = edited);
 
     try {
       final fileName =
@@ -462,7 +469,13 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
 
-    setState(() => _coverPhotoFile = File(picked.path));
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      imagePath: picked.path,
+      outputNamePrefix: 'cover',
+    );
+    if (edited == null) return;
+    setState(() => _coverPhotoFile = edited);
 
     try {
       final fileName =
@@ -492,6 +505,35 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     }
   }
 
+  void _previewCoverImage() {
+    if (_coverPhotoFile == null && (_coverPhotoUrl == null || _coverPhotoUrl!.isEmpty)) {
+      return;
+    }
+    final ImageProvider<Object> provider = _coverPhotoFile != null
+        ? FileImage(_coverPhotoFile!)
+        : NetworkImage(_coverPhotoUrl!);
+    openProfileMediaPreview(
+      context,
+      image: provider,
+      heroTag: 'wellness-cover-${widget.profileUserId}',
+    );
+  }
+
+  void _previewProfileImage() {
+    if (_profilePhotoFile == null &&
+        (_profilePhotoUrl == null || _profilePhotoUrl!.isEmpty)) {
+      return;
+    }
+    final ImageProvider<Object> provider = _profilePhotoFile != null
+        ? FileImage(_profilePhotoFile!)
+        : NetworkImage(_profilePhotoUrl!);
+    openProfileMediaPreview(
+      context,
+      image: provider,
+      heroTag: 'wellness-avatar-${widget.profileUserId}',
+    );
+  }
+
   // ===================================================================
   //  UI HELPERS (HEADER)
   // ===================================================================
@@ -503,13 +545,17 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         : const AssetImage('assets/images/bio.png')) as ImageProvider;
 
     return GestureDetector(
-      onTap: _isOwnProfile ? _pickCoverImage : null,
+      onTap: _isOwnProfile ? _pickCoverImage : _previewCoverImage,
+      onLongPress: _previewCoverImage,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Container(
-            decoration: BoxDecoration(
-              image: DecorationImage(image: cover, fit: BoxFit.cover),
+          Hero(
+            tag: 'wellness-cover-${widget.profileUserId}',
+            child: Container(
+              decoration: BoxDecoration(
+                image: DecorationImage(image: cover, fit: BoxFit.cover),
+              ),
             ),
           ),
           Container(
@@ -536,7 +582,8 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     return Hero(
       tag: 'wellness-avatar-${widget.profileUserId}',
       child: GestureDetector(
-        onTap: _isOwnProfile ? _pickProfileImage : null,
+        onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
+        onLongPress: _previewProfileImage,
         child: Stack(
           children: [
             Container(
@@ -937,6 +984,37 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                 expandedHeight: _coverHeight,
                 backgroundColor: _lavender,
                 elevation: 0,
+                bottom: PreferredSize(
+                  preferredSize: const Size.fromHeight(58),
+                  child: Container(
+                    color: Colors.white,
+                    child: TabBar(
+                      controller: _tabController,
+                      indicatorColor: _lavender,
+                      indicatorWeight: 3,
+                      labelColor: Colors.black87,
+                      unselectedLabelColor: Colors.black54,
+                      labelStyle: GoogleFonts.poppins(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      unselectedLabelStyle: GoogleFonts.poppins(
+                        fontSize: 14,
+                        fontWeight: FontWeight.normal,
+                      ),
+                      tabs: const [
+                        Tab(
+                          icon: Icon(Icons.grid_on_outlined, size: 20),
+                          text: 'Profile',
+                        ),
+                        Tab(
+                          icon: Icon(Icons.dashboard_outlined, size: 20),
+                          text: 'Business',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
                 leading: IconButton(
                   icon: const Icon(Icons.arrow_back),
                   onPressed: () => Navigator.pop(context),
@@ -1009,36 +1087,6 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
               SliverToBoxAdapter(
                 child: _buildProfileHeaderSection(),
-              ),
-
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _SliverAppBarDelegate(
-                  TabBar(
-                    controller: _tabController,
-                    indicatorColor: _lavender,
-                    indicatorWeight: 3,
-                    labelColor: Colors.black87,
-                    unselectedLabelColor: Colors.black54,
-                    labelStyle: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    unselectedLabelStyle: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.normal,
-                    ),
-                    tabs: const [
-                      Tab(
-                        icon: Icon(Icons.grid_on_outlined, size: 24),
-                      ),
-                      Tab(
-                        icon:
-                        Icon(Icons.dashboard_outlined, size: 24),
-                      ),
-                    ],
-                  ),
-                ),
               ),
             ];
           },

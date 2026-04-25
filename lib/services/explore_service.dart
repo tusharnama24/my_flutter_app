@@ -3,6 +3,9 @@ import 'package:halo/utils/explore_ranking.dart';
 
 class ExploreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static const Duration _kSideQueryTtl = Duration(minutes: 3);
+  static final Map<String, _TimedListCache> _followingCache = {};
+  static final Map<String, _TimedListCache> _interestsCache = {};
 
   /// Posts from last 3 days, ordered by createdAt descending, limit 200.
   Stream<QuerySnapshot<Map<String, dynamic>>> getRecentPosts() {
@@ -18,15 +21,19 @@ class ExploreService {
   /// User IDs that the current user follows.
   Future<List<String>> getFollowingIds(String currentUserId) async {
     if (currentUserId.isEmpty) return [];
+    final cached = _followingCache[currentUserId];
+    if (cached != null && !cached.isExpired) return cached.values;
     try {
       final snap = await _firestore
           .collection('follows')
           .where('followerId', isEqualTo: currentUserId)
           .get();
-      return snap.docs
+      final values = snap.docs
           .map((d) => (d.data()['followingId'] as String?) ?? '')
           .where((id) => id.isNotEmpty)
           .toList();
+      _followingCache[currentUserId] = _TimedListCache(values);
+      return values;
     } catch (_) {
       return [];
     }
@@ -35,16 +42,26 @@ class ExploreService {
   /// Current user's interests from user_interests collection.
   Future<List<String>> getUserInterests(String currentUserId) async {
     if (currentUserId.isEmpty) return [];
+    final cached = _interestsCache[currentUserId];
+    if (cached != null && !cached.isExpired) return cached.values;
     try {
       final snap = await _firestore
           .collection('user_interests')
           .where('userId', isEqualTo: currentUserId)
           .limit(1)
           .get();
-      if (snap.docs.isEmpty) return [];
+      if (snap.docs.isEmpty) {
+        _interestsCache[currentUserId] = _TimedListCache(const []);
+        return [];
+      }
       final list = snap.docs.first.data()['interests'];
-      if (list is! List) return [];
-      return list.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+      if (list is! List) {
+        _interestsCache[currentUserId] = _TimedListCache(const []);
+        return [];
+      }
+      final values = list.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+      _interestsCache[currentUserId] = _TimedListCache(values);
+      return values;
     } catch (_) {
       return [];
     }
@@ -95,6 +112,18 @@ class ExploreService {
       return result;
     });
   }
+}
+
+class _TimedListCache {
+  final List<String> values;
+  final DateTime fetchedAt;
+
+  _TimedListCache(List<String> source)
+      : values = List.unmodifiable(source),
+        fetchedAt = DateTime.now();
+
+  bool get isExpired =>
+      DateTime.now().difference(fetchedAt) > ExploreService._kSideQueryTtl;
 }
 
 class _ScoredPost {

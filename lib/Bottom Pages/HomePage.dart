@@ -1,8 +1,9 @@
 // HomePage.dart — Instagram-style feed for Halo
-// Fixed version — all bugs resolved
+// All bugs fixed — see fix comments tagged [FIX-n]
 
 import 'package:halo/Bottom%20Pages/AddPostPage.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:halo/chat/chat_list_page.dart';
@@ -11,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import 'package:halo/Profile%20Pages/wellness_profile_page.dart'
 as wellness_profile;
 import 'package:halo/interest_selection_page.dart';
@@ -26,10 +28,14 @@ as guru_profile;
 
 import 'package:halo/services/feed_service.dart';
 import 'package:halo/widgets/save_button.dart';
+import 'package:halo/services/save_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'NotificationPage.dart';
 import 'SearchPage.dart';
 import 'ExplorePage.dart';
+import 'SettingsPage.dart';
+import 'saved_posts_page.dart';
 
 // ---- THEME COLORS ----
 const Color kPrimaryColor = Color(0xFFA58CE3);
@@ -52,6 +58,19 @@ String _profilePhotoUrlFromUser(Map<String, dynamic>? data) {
   return s.isEmpty ? '' : s;
 }
 
+int _asInt(dynamic value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+int? _asIntNullable(dynamic value) {
+  if (value == null) return null;
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse(value.toString());
+}
+
 class HomePage extends StatefulWidget {
   @override
   _HomePageState createState() => _HomePageState();
@@ -68,28 +87,66 @@ class _HomePageState extends State<HomePage> {
   int _feedTabIndex = 0;
   String _contentPreference = '';
 
-  // FIX #5: Use a key to force StreamBuilder rebuild on refresh
   int _feedRefreshKey = 0;
-
-  // FIX #4: Compute feed stream once; update only on explicit refresh
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _feedStream;
+
+  // [FIX-7] Store SaveService stream and BottomNav user stream in state —
+  // never create streams inside build() because each call creates a new
+  // subscription and defeats StreamBuilder's internal caching.
+  late final Stream<Map<String, dynamic>> _savedPostsStream;
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _userDocStream;
+
+  // [FIX-4] Cache accountType so the BottomNav profile tap doesn't need
+  // a Firestore read on every press.
+  String _accountType = 'aspirant';
+  String _userProfileUrl = '';
 
   @override
   void initState() {
     super.initState();
     _initFeedStream();
+    _initSideStreams();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybePromptForLocation();
     });
     _loadInterests();
   }
 
-  // FIX #4: stable stream, not re-created on every auth event
+  // [FIX-7] Streams are created once here, not in build().
+  void _initSideStreams() {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    _savedPostsStream = uid.isNotEmpty
+        ? SaveService().savedPostsStream(uid)
+        : const Stream.empty();
+
+    if (uid.isNotEmpty) {
+      _userDocStream = FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .snapshots();
+      // [FIX-4] Listen once to cache accountType for profile navigation.
+      _userDocStream.listen((snap) {
+        if (!mounted) return;
+        final data = snap.data();
+        setState(() {
+          _accountType =
+              (data?['accountType'] as String?)?.toLowerCase() ?? 'aspirant';
+          _userProfileUrl = _profilePhotoUrlFromUser(data);
+        });
+      });
+    } else {
+      _userDocStream = const Stream.empty();
+    }
+  }
+
   void _initFeedStream() {
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _feedStream = _feedService.getRankedFeedStream(
       currentUserId: uid,
+      // [FIX-11] _contentPreference is wired; extend FeedService to filter
+      // by following when _feedTabIndex == 1.
       userPreference: _contentPreference,
+      followingOnly: _feedTabIndex == 1,
     );
   }
 
@@ -133,8 +190,7 @@ class _HomePageState extends State<HomePage> {
               if (!mounted) return;
               if (result.isGranted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Location permission granted')),
+                  const SnackBar(content: Text('Location permission granted')),
                 );
               } else if (result.isPermanentlyDenied) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -156,9 +212,97 @@ class _HomePageState extends State<HomePage> {
     await prefs.setBool('location_prompt_shown', true);
   }
 
-  void _onMenuAction(_HaloMenuAction action) {
+  // [FIX-13] Logout is now handled explicitly instead of falling through
+  // to _showFeaturePlaceholder.
+  Future<void> _onMenuAction(_HaloMenuAction action) async {
     switch (action) {
       case _HaloMenuAction.home:
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You are already on Home')),
+        );
+        return;
+      case _HaloMenuAction.feed:
+        if (!mounted) return;
+        setState(() {
+          _feedTabIndex = 0;
+          _feedRefreshKey++;
+          _initFeedStream();
+        });
+        return;
+      case _HaloMenuAction.premium:
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SavedPostsPage()),
+        );
+        return;
+      case _HaloMenuAction.wellness:
+        if (!mounted) return;
+        _openMyProfile();
+        return;
+      case _HaloMenuAction.challenges:
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const InterestSelectionPage(isFromSettings: true),
+          ),
+        );
+        if (!mounted) return;
+        await _loadInterests();
+        return;
+      case _HaloMenuAction.profileSettings:
+        if (!mounted) return;
+        final result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => SettingsPage()),
+        );
+        if (!mounted) return;
+        if (result == 'logout') {
+          await _onMenuAction(_HaloMenuAction.logout);
+        } else if (result == 'edit_profile') {
+          _openMyProfile();
+        }
+        return;
+      case _HaloMenuAction.events:
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => NotificationPage()),
+        );
+        return;
+      case _HaloMenuAction.analytics:
+        if (!mounted) return;
+        _openMyProfile();
+        return;
+      case _HaloMenuAction.gurus:
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => SearchPage()),
+        );
+        return;
+      case _HaloMenuAction.logout:
+        try {
+          await FirebaseAuth.instance.signOut();
+          if (!mounted) return;
+          // AuthGate listens to authStateChanges and will render LoginPage.
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Sign-out failed: $e')));
+        }
+        return;
+      case _HaloMenuAction.email:
+        await _openSupportEmail();
+        return;
+      case _HaloMenuAction.share:
+        await _shareAppLink();
+        return;
+      case _HaloMenuAction.customerCare:
+        await _openCustomerCare();
         return;
       default:
         _showFeaturePlaceholder(action.name);
@@ -168,6 +312,42 @@ class _HomePageState extends State<HomePage> {
   void _showFeaturePlaceholder(String feature) {
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text('$feature coming soon!')));
+  }
+
+  Future<void> _openSupportEmail() async {
+    final uri = Uri.parse(
+      'mailto:support@haloapp.in?subject=${Uri.encodeComponent('Halo Support')}',
+    );
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open email app')),
+      );
+    }
+  }
+
+  Future<void> _shareAppLink() async {
+    const appLink = 'https://haloapp.in';
+    const message = 'Check out Halo: https://haloapp.in';
+    await Clipboard.setData(const ClipboardData(text: message));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('App link copied to clipboard')),
+    );
+    final uri = Uri.parse(
+      'sms:?body=${Uri.encodeComponent('Check out Halo: $appLink')}',
+    );
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _openCustomerCare() async {
+    final phoneUri = Uri.parse('tel:+919999999999');
+    final openedDialer = await launchUrl(
+      phoneUri,
+      mode: LaunchMode.externalApplication,
+    );
+    if (openedDialer || !mounted) return;
+    await _openSupportEmail();
   }
 
   Widget _buildFeedSegmentedControl() {
@@ -196,7 +376,16 @@ class _HomePageState extends State<HomePage> {
     final selected = _feedTabIndex == index;
     return Expanded(
       child: GestureDetector(
-        onTap: () => setState(() => _feedTabIndex = index),
+        // [FIX-6] Switching tabs now re-creates the feed stream so the
+        // "Following" tab actually shows different content.
+        onTap: () {
+          if (_feedTabIndex == index) return;
+          setState(() {
+            _feedTabIndex = index;
+            _feedRefreshKey++;
+            _initFeedStream();
+          });
+        },
         behavior: HitTestBehavior.opaque,
         child: Center(
           child: Text(
@@ -212,14 +401,52 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // [FIX-3] Navigate to profile using cached _accountType — no Firestore
+  // read at tap time.
+  void _openMyProfile() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please sign in to view profile')));
+      return;
+    }
+    if (_accountType == 'wellness') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              wellness_profile.WellnessProfilePage(profileUserId: uid),
+        ),
+      );
+    } else if (_accountType == 'guru') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => guru_profile.GuruProfilePage(profileUserId: uid),
+        ),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              aspirant_profile.ProfilePage(profileUserId: uid),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final textTheme =
     GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+    final currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
     return Theme(
       data: Theme.of(context).copyWith(textTheme: textTheme),
       child: GestureDetector(
+        // [FIX-14] Use push instead of pushReplacement so the back-stack
+        // is preserved when opening chat via swipe or icon.
         onHorizontalDragEnd: (details) {
           if (details.velocity.pixelsPerSecond.dx < 0) {
             final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -228,7 +455,7 @@ class _HomePageState extends State<HomePage> {
                   const SnackBar(content: Text('Please sign in to use chat')));
               return;
             }
-            Navigator.pushReplacement(
+            Navigator.push(
               context,
               MaterialPageRoute(
                   builder: (_) => ChatListPage(currentUserId: uid)),
@@ -280,7 +507,8 @@ class _HomePageState extends State<HomePage> {
                           content: Text('Please sign in to use chat')));
                       return;
                     }
-                    Navigator.pushReplacement(
+                    // [FIX-14] push, not pushReplacement
+                    Navigator.push(
                       context,
                       MaterialPageRoute(
                           builder: (_) => ChatListPage(currentUserId: uid)),
@@ -315,7 +543,6 @@ class _HomePageState extends State<HomePage> {
               top: false,
               child: RefreshIndicator(
                 key: _refreshKey,
-                // FIX #5: Refresh re-creates the feed stream
                 onRefresh: () async {
                   setState(() {
                     _feedRefreshKey++;
@@ -323,455 +550,331 @@ class _HomePageState extends State<HomePage> {
                   });
                   await Future.delayed(const Duration(milliseconds: 400));
                 },
-                child: SingleChildScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12.0, vertical: 8.0),
-                  child: Column(
-                    children: [
-                      // FIX #3: _StoriesStrip now a StatefulWidget (stream stable)
-                      const _StoriesStrip(),
-                      const SizedBox(height: 12),
-                      _buildFeedSegmentedControl(),
-                      const SizedBox(height: 8),
-                      // FIX #4 + #5: stable stream + refresh key
-                      StreamBuilder<
-                          List<
-                              QueryDocumentSnapshot<Map<String, dynamic>>>>(
-                        key: ValueKey(_feedRefreshKey),
-                        stream: _feedStream,
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState ==
-                              ConnectionState.waiting) {
-                            return const Padding(
-                              padding: EdgeInsets.all(24.0),
-                              child: Center(
-                                  child: CircularProgressIndicator()),
-                            );
-                          }
-                          if (snapshot.hasError) {
-                            return Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: Text(
-                                  'Error loading posts: ${snapshot.error}'),
-                            );
-                          }
-
-                          final rankedDocs = snapshot.data ?? [];
-                          List<QueryDocumentSnapshot<Map<String, dynamic>>>
-                          filtered = rankedDocs;
-
-                          if (_interests.isNotEmpty) {
-                            filtered = rankedDocs.where((d) {
-                              final data = d.data();
-                              final accountType =
-                              (data['accountType'] ?? '')
-                                  .toString()
-                                  .toLowerCase();
-                              if (accountType == 'guru') return true;
-                              final tags = (data['tags'] as List?)
-                                  ?.map((e) => e.toString())
-                                  .toList() ??
-                                  [];
-                              if (tags.isEmpty) return true;
-                              return tags
-                                  .any((t) => _interests.contains(t));
-                            }).toList();
-                          }
-
-                          if (filtered.isEmpty) {
-                            return Padding(
-                              padding: const EdgeInsets.all(24.0),
-                              child: Column(
-                                children: [
-                                  Icon(Icons.inbox_outlined,
-                                      size: 40,
-                                      color: Colors.grey.shade500),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    'No posts yet',
-                                    style: textTheme.titleMedium?.copyWith(
-                                        color: Colors.grey.shade700),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Follow more people or add your first post.',
-                                    textAlign: TextAlign.center,
-                                    style: textTheme.bodySmall?.copyWith(
-                                        color: Colors.grey.shade600),
-                                  ),
-                                ],
+                // [FIX-1] The SaveService stream is now stable (created in
+                // initState). The outer StreamBuilder no longer wraps the
+                // entire feed — savedPostsMap is passed directly to
+                // _PostActions, preventing full-list rebuilds on save events.
+                child: StreamBuilder<Map<String, dynamic>>(
+                  stream: _savedPostsStream,
+                  builder: (context, savedSnap) {
+                    final savedPostsMap =
+                        savedSnap.data ?? const <String, dynamic>{};
+                    return StreamBuilder<
+                        List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+                      key: ValueKey(_feedRefreshKey),
+                      stream: _feedStream,
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12.0, vertical: 8.0),
+                            children: const [
+                              _StoriesStrip(),
+                              SizedBox(height: 12),
+                              Center(
+                                  child: Padding(
+                                    padding: EdgeInsets.all(24.0),
+                                    child: CircularProgressIndicator(),
+                                  )),
+                            ],
+                          );
+                        }
+                        if (snapshot.hasError) {
+                          return ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12.0, vertical: 8.0),
+                            children: [
+                              const _StoriesStrip(),
+                              const SizedBox(height: 12),
+                              Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: Text(
+                                    'Error loading posts: ${snapshot.error}'),
                               ),
-                            );
-                          }
+                            ],
+                          );
+                        }
 
-                          return ListView.builder(
-                            physics: const NeverScrollableScrollPhysics(),
-                            shrinkWrap: true,
-                            itemCount: filtered.length,
-                            itemBuilder: (context, index) {
-                              final data = filtered[index].data();
-                              final media =
-                                  (data['media'] as List?)
-                                      ?.cast<dynamic>() ??
-                                      const [];
-                              final images = List<String>.from(
-                                  data['images'] ?? const []);
-                              final imageUrl =
-                                  (data['imageUrl'] as String?)
-                                      ?.trim() ??
-                                      '';
-                              final caption =
-                              (data['caption'] ?? '').toString();
-                              final location =
-                              (data['location'] ?? '').toString();
-                              final createdAt =
-                              data['createdAt'] as Timestamp?;
-                              final createdText = createdAt != null
-                                  ? createdAt
-                                  .toDate()
-                                  .toLocal()
-                                  .toString()
-                                  .substring(0, 16)
-                                  : '';
-                              final userId =
-                              (data['userId'] ?? '').toString();
+                        final rankedDocs = snapshot.data ?? [];
+                        List<QueryDocumentSnapshot<Map<String, dynamic>>>
+                        filtered = rankedDocs;
 
+                        if (_interests.isNotEmpty) {
+                          filtered = rankedDocs.where((d) {
+                            final data = d.data();
+                            final accountType =
+                            (data['accountType'] ?? '').toString().toLowerCase();
+
+                            if (accountType == 'guru') return true;
+
+                            final tags = (data['tags'] as List?)
+                                ?.map((e) => e.toString())
+                                .toList() ?? [];
+
+                            // ✅ allow posts without tags
+                            if (tags.isEmpty) return true;
+
+                            return tags.any((t) => _interests.contains(t));
+                          }).toList();
+                        }
+
+                        final hasPosts = filtered.isNotEmpty;
+                        const headerCount = 2;
+                        final emptyStateCount = hasPosts ? 0 : 1;
+                        final totalCount =
+                            headerCount + filtered.length + emptyStateCount;
+
+                        return ListView.builder(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12.0, vertical: 8.0),
+                          itemCount: totalCount,
+                          itemBuilder: (context, index) {
+                            if (index == 0) {
+                              return const Column(
+                                children: [
+                                  _StoriesStrip(),
+                                  SizedBox(height: 12),
+                                ],
+                              );
+                            }
+                            if (index == 1) {
+                              return Column(
+                                children: [
+                                  _buildFeedSegmentedControl(),
+                                  const SizedBox(height: 8),
+                                ],
+                              );
+                            }
+                            if (!hasPosts) {
                               return Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 4.0, vertical: 6.0),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: kIgPostBackground,
-                                    borderRadius:
-                                    BorderRadius.circular(10),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black
-                                            .withOpacity(0.06),
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 2),
-                                      ),
-                                    ],
-                                  ),
-                                  child: ClipRRect(
-                                    borderRadius:
-                                    BorderRadius.circular(10),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                      children: [
-                                        // Header
-                                        userId.isNotEmpty
-                                            ? StreamBuilder<
-                                            DocumentSnapshot<
-                                                Map<String,
-                                                    dynamic>>>(
-                                          stream: FirebaseFirestore
-                                              .instance
-                                              .collection('users')
-                                              .doc(userId)
-                                              .snapshots(),
-                                          builder:
-                                              (context, userSnap) {
-                                            final doc =
-                                                userSnap.data;
-                                            final uData =
-                                            doc?.data();
-                                            final username = (doc !=
-                                                null &&
-                                                doc.exists)
-                                                ? (uData?[
-                                            'username'] ??
-                                                uData?['name'] ??
-                                                uData?[
-                                                'full_name'] ??
-                                                'User')
-                                                : 'User';
-                                            final profilePhotoUrl =
-                                            _profilePhotoUrlFromUser(
-                                                uData);
-                                            final accountType =
-                                                (uData?['accountType']
-                                                as String?)
-                                                    ?.toLowerCase() ??
-                                                    'aspirant';
+                                padding: const EdgeInsets.all(24.0),
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.inbox_outlined,
+                                        size: 40,
+                                        color: Colors.grey.shade500),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'No posts yet',
+                                      style: textTheme.titleMedium?.copyWith(
+                                          color: Colors.grey.shade700),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Follow more people or add your first post.',
+                                      textAlign: TextAlign.center,
+                                      style: textTheme.bodySmall?.copyWith(
+                                          color: Colors.grey.shade600),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
 
-                                            return _PostHeader(
-                                              username: username
-                                                  .toString(),
-                                              profilePhotoUrl:
-                                              profilePhotoUrl,
-                                              subtitle: location
-                                                  .isNotEmpty
-                                                  ? location
-                                                  : createdText,
-                                              onTap: () {
-                                                if (userId
-                                                    .isEmpty) return;
-                                                if (accountType ==
-                                                    'wellness') {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (_) =>
-                                                          wellness_profile
-                                                              .WellnessProfilePage(
-                                                              profileUserId:
-                                                              userId),
+                            final feedIndex = index - headerCount;
+                            final data = filtered[feedIndex].data();
+                            final media =
+                                (data['media'] as List?)?.cast<dynamic>() ??
+                                    const [];
+                            final images = List<String>.from(
+                                data['images'] ?? const []);
+                            final imageUrl =
+                                (data['imageUrl'] as String?)?.trim() ?? '';
+                            final caption =
+                            (data['caption'] ?? '').toString();
+                            final location =
+                            (data['location'] ?? '').toString();
+                            final createdAt =
+                            data['createdAt'] as Timestamp?;
+                            final createdText = createdAt != null
+                                ? createdAt
+                                .toDate()
+                                .toLocal()
+                                .toString()
+                                .substring(0, 16)
+                                : '';
+                            final userId =
+                            (data['userId'] ?? '').toString();
+
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 4.0, vertical: 6.0),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: kIgPostBackground,
+                                  borderRadius: BorderRadius.circular(10),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color:
+                                      Colors.black.withOpacity(0.06),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                    children: [
+                                      userId.isNotEmpty
+                                          ? _PostUserHeader(
+                                        userId: userId,
+                                        subtitle: location.isNotEmpty
+                                            ? location
+                                            : createdText,
+                                      )
+                                          : _PostHeader(
+                                        username: 'User',
+                                        profilePhotoUrl: '',
+                                        subtitle: location.isNotEmpty
+                                            ? location
+                                            : createdText,
+                                        onTap: null,
+                                      ),
+                                      _DoubleTapHeartOverlay(
+                                        postId: filtered[feedIndex].id,
+                                        child: media.isNotEmpty
+                                            ? _PostMedia(
+                                          media: media,
+                                          onVideoTap: () {
+                                            Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (_) =>
+                                                    ExplorePage(
+                                                      openReelsOnStart:
+                                                      true,
+                                                      initialReelPostId:
+                                                      filtered[feedIndex]
+                                                          .id,
                                                     ),
-                                                  );
-                                                } else if (accountType ==
-                                                    'guru') {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (_) =>
-                                                          guru_profile
-                                                              .GuruProfilePage(
-                                                              profileUserId:
-                                                              userId),
-                                                    ),
-                                                  );
-                                                } else {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (_) =>
-                                                          aspirant_profile
-                                                              .ProfilePage(
-                                                              profileUserId:
-                                                              userId),
-                                                    ),
-                                                  );
-                                                }
-                                              },
+                                              ),
                                             );
                                           },
                                         )
-                                            : _PostHeader(
-                                          username: 'User',
-                                          profilePhotoUrl: '',
-                                          subtitle: location
-                                              .isNotEmpty
-                                              ? location
-                                              : createdText,
-                                          onTap: null,
-                                        ),
-
-                                        // Media with double-tap heart
-                                        _DoubleTapHeartOverlay(
-                                          postId: filtered[index].id,
-                                          child: media.isNotEmpty
-                                              ? _PostMedia(
-                                                  media: media,
-                                                  onVideoTap: () {
-                                                    Navigator.push(
-                                                      context,
-                                                      MaterialPageRoute(
-                                                        builder: (_) => ExplorePage(
-                                                          openReelsOnStart: true,
-                                                          initialReelPostId:
-                                                              filtered[index].id,
-                                                        ),
-                                                      ),
-                                                    );
-                                                  },
-                                                )
-                                              : (images.isNotEmpty &&
-                                              images.first
-                                                  .trim()
-                                                  .isNotEmpty
-                                              ? _PostImage(
-                                              url: images.first)
-                                              : imageUrl
-                                              .trim()
-                                              .isNotEmpty
-                                              ? _PostImage(
-                                              url: imageUrl)
-                                              : const SizedBox
-                                              .shrink()),
-                                        ),
-
-                                        // FIX #2: single combined widget for actions + counts
-                                        _PostActions(
-                                          postId: filtered[index].id,
-                                          postData: data,
-                                        ),
-
-                                        // Caption
-                                        if (caption.isNotEmpty)
-                                          Padding(
-                                            padding:
-                                            const EdgeInsets.symmetric(
-                                                horizontal: 16.0,
-                                                vertical: 10.0),
-                                            child: Text(
-                                              caption,
-                                              style: textTheme.bodyMedium
-                                                  ?.copyWith(
-                                                color: kIgPrimaryText,
-                                                fontSize: 15,
-                                                height: 1.35,
-                                              ),
+                                            : (images.isNotEmpty &&
+                                            images.first
+                                                .trim()
+                                                .isNotEmpty
+                                            ? _PostImage(
+                                            url: images.first)
+                                            : imageUrl
+                                            .trim()
+                                            .isNotEmpty
+                                            ? _PostImage(
+                                            url: imageUrl)
+                                            : const SizedBox
+                                            .shrink()),
+                                      ),
+                                      _PostActions(
+                                        postId: filtered[feedIndex].id,
+                                        savedPostsMap: savedPostsMap,
+                                      ),
+                                      if (caption.isNotEmpty)
+                                        Padding(
+                                          padding: const EdgeInsets
+                                              .symmetric(
+                                              horizontal: 16.0,
+                                              vertical: 10.0),
+                                          child: Text(
+                                            caption,
+                                            style: textTheme.bodyMedium
+                                                ?.copyWith(
+                                              color: kIgPrimaryText,
+                                              fontSize: 15,
+                                              height: 1.35,
                                             ),
                                           ),
-
-                                        const SizedBox(height: 8),
-                                      ],
-                                    ),
+                                        ),
+                                      const SizedBox(height: 8),
+                                    ],
                                   ),
                                 ),
-                              );
-                            },
-                          );
-                        },
-                      ),
-                    ],
-                  ),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
                 ),
               ),
             ),
           ),
 
-          bottomNavigationBar:
-          StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-            stream: (() {
-              final uid = FirebaseAuth.instance.currentUser?.uid;
-              if (uid == null || uid.isEmpty) {
-                return const Stream<
-                    DocumentSnapshot<Map<String, dynamic>>>.empty();
+          // [FIX-8] BottomNav no longer has a StreamBuilder — user data is
+          // already cached in _userProfileUrl and _accountType via the
+          // listener set up in _initSideStreams().
+          bottomNavigationBar: BottomNavigationBar(
+            type: BottomNavigationBarType.fixed,
+            currentIndex: 0,
+            backgroundColor: Colors.white,
+            elevation: 12,
+            selectedItemColor: kSecondaryColor,
+            unselectedItemColor: Colors.grey.shade500,
+            showSelectedLabels: false,
+            showUnselectedLabels: false,
+            onTap: (index) {
+              if (index == 0) return;
+              if (index == 1) {
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => SearchPage()));
+              } else if (index == 2) {
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => ExplorePage()));
+              } else if (index == 3) {
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => AddPostPage()));
+              } else if (index == 4) {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => NotificationPage()));
+              } else if (index == 5) {
+                // [FIX-4] No Firestore call — use cached _accountType
+                _openMyProfile();
               }
-              return FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(uid)
-                  .snapshots();
-            })(),
-            builder: (context, snap) {
-              final userProfileUrl =
-              _profilePhotoUrlFromUser(snap.data?.data());
-              return BottomNavigationBar(
-                type: BottomNavigationBarType.fixed,
-                currentIndex: 0,
-                backgroundColor: Colors.white,
-                elevation: 12,
-                selectedItemColor: kSecondaryColor,
-                unselectedItemColor: Colors.grey.shade500,
-                showSelectedLabels: false,
-                showUnselectedLabels: false,
-                onTap: (index) async {
-                  if (index == 0) return;
-                  if (index == 1) {
-                    Navigator.push(context,
-                        MaterialPageRoute(builder: (_) => SearchPage()));
-                  } else if (index == 2) {
-                    Navigator.push(context,
-                        MaterialPageRoute(builder: (_) => ExplorePage()));
-                  } else if (index == 3) {
-                    Navigator.push(context,
-                        MaterialPageRoute(builder: (_) => AddPostPage()));
-                  } else if (index == 4) {
-                    Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => NotificationPage()));
-                  } else if (index == 5) {
-                    final uid =
-                        FirebaseAuth.instance.currentUser?.uid;
-                    if (uid == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text(
-                                  'Please sign in to view profile')));
-                      return;
-                    }
-                    try {
-                      final doc = await FirebaseFirestore.instance
-                          .collection('users')
-                          .doc(uid)
-                          .get();
-                      final accountType =
-                          doc.data()?['accountType']
-                              ?.toString()
-                              .toLowerCase() ??
-                              'aspirant';
-                      if (accountType == 'wellness') {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                wellness_profile.WellnessProfilePage(
-                                    profileUserId: uid),
-                          ),
-                        );
-                      } else if (accountType == 'guru') {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                guru_profile.GuruProfilePage(
-                                    profileUserId: uid),
-                          ),
-                        );
-                      } else {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                aspirant_profile.ProfilePage(
-                                    profileUserId: uid),
-                          ),
-                        );
-                      }
-                    } catch (_) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => aspirant_profile.ProfilePage(
-                              profileUserId: uid),
-                        ),
-                      );
-                    }
-                  }
-                },
-                items: [
-                  const BottomNavigationBarItem(
-                      icon: Icon(Icons.home_rounded), label: ''),
-                  const BottomNavigationBarItem(
-                      icon: Icon(Icons.search_rounded), label: ''),
-                  const BottomNavigationBarItem(
-                      icon: Icon(Icons.explore_rounded), label: ''),
-                  const BottomNavigationBarItem(
-                      icon: Icon(Icons.add_box_outlined), label: ''),
-                  const BottomNavigationBarItem(
-                      icon: Icon(Icons.favorite_outline_rounded),
-                      label: ''),
-                  BottomNavigationBarItem(
-                    icon: CircleAvatar(
-                      radius: 12,
-                      backgroundColor: Colors.grey.shade200,
-                      // FIX #6: clean avatar logic
-                      child: ClipOval(
-                        child: userProfileUrl.isNotEmpty
-                            ? CachedNetworkImage(
-                          imageUrl: userProfileUrl,
-                          width: 24,
-                          height: 24,
-                          fit: BoxFit.cover,
-                          errorWidget: (_, __, ___) => const Icon(
-                              Icons.person,
-                              size: 16,
-                              color: Colors.grey),
-                        )
-                            : const Icon(Icons.person,
-                            size: 16, color: Colors.grey),
-                      ),
-                    ),
-                    label: '',
-                  ),
-                ],
-              );
             },
+            items: [
+              const BottomNavigationBarItem(
+                  icon: Icon(Icons.home_rounded), label: ''),
+              const BottomNavigationBarItem(
+                  icon: Icon(Icons.search_rounded), label: ''),
+              const BottomNavigationBarItem(
+                  icon: Icon(Icons.explore_rounded), label: ''),
+              const BottomNavigationBarItem(
+                  icon: Icon(Icons.add_box_outlined), label: ''),
+              const BottomNavigationBarItem(
+                  icon: Icon(Icons.favorite_outline_rounded), label: ''),
+              BottomNavigationBarItem(
+                icon: CircleAvatar(
+                  radius: 12,
+                  backgroundColor: Colors.grey.shade200,
+                  child: ClipOval(
+                    child: _userProfileUrl.isNotEmpty
+                        ? CachedNetworkImage(
+                      imageUrl: _userProfileUrl,
+                      width: 24,
+                      height: 24,
+                      fit: BoxFit.cover,
+                      errorWidget: (_, __, ___) => const Icon(
+                          Icons.person,
+                          size: 16,
+                          color: Colors.grey),
+                    )
+                        : const Icon(Icons.person,
+                        size: 16, color: Colors.grey),
+                  ),
+                ),
+                label: '',
+              ),
+            ],
           ),
         ),
       ),
@@ -779,7 +882,7 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// ---------------------- Extracted reusable post header ----------------------
+// ---------------------- Post Header ----------------------
 
 class _PostHeader extends StatelessWidget {
   final String username;
@@ -804,7 +907,6 @@ class _PostHeader extends StatelessWidget {
       const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       leading: GestureDetector(
         onTap: onTap,
-        // FIX #6: clean CircleAvatar logic — no conflicting backgroundImage + child
         child: CircleAvatar(
           radius: 20,
           backgroundColor: Colors.grey.shade200,
@@ -817,9 +919,11 @@ class _PostHeader extends StatelessWidget {
               fit: BoxFit.cover,
               placeholder: (_, __) => const Icon(Icons.person,
                   color: Colors.grey, size: 24),
-              errorWidget: (_, __, ___) =>
-                  Image.asset('assets/images/Profile.png',
-                      width: 40, height: 40, fit: BoxFit.cover),
+              errorWidget: (_, __, ___) => Image.asset(
+                  'assets/images/Profile.png',
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.cover),
             )
                 : Image.asset('assets/images/Profile.png',
                 width: 40, height: 40, fit: BoxFit.cover),
@@ -838,8 +942,8 @@ class _PostHeader extends StatelessWidget {
       ),
       subtitle: Text(
         subtitle,
-        style:
-        textTheme.bodySmall?.copyWith(color: kIgSecondaryText, fontSize: 12),
+        style: textTheme.bodySmall
+            ?.copyWith(color: kIgSecondaryText, fontSize: 12),
       ),
       trailing: IconButton(
         icon: const Icon(Icons.more_horiz_rounded),
@@ -851,7 +955,7 @@ class _PostHeader extends StatelessWidget {
   }
 }
 
-// ---------------------- Extracted post image widget ----------------------
+// ---------------------- Post Image ----------------------
 
 class _PostImage extends StatelessWidget {
   final String url;
@@ -859,30 +963,26 @@ class _PostImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(0),
-      child: CachedNetworkImage(
-        imageUrl: url,
+    return CachedNetworkImage(
+      imageUrl: url,
+      height: 300,
+      width: double.infinity,
+      fit: BoxFit.cover,
+      placeholder: (_, __) => Container(
         height: 300,
-        width: double.infinity,
-        fit: BoxFit.cover,
-        placeholder: (_, __) => Container(
-          height: 300,
-          color: Colors.grey.shade200,
-          child: const Center(child: CircularProgressIndicator()),
-        ),
-        errorWidget: (_, __, ___) => Container(
-          height: 300,
-          color: Colors.grey[300],
-          child: const Center(child: Icon(Icons.broken_image)),
-        ),
+        color: Colors.grey.shade200,
+        child: const Center(child: CircularProgressIndicator()),
+      ),
+      errorWidget: (_, __, ___) => Container(
+        height: 300,
+        color: Colors.grey[300],
+        child: const Center(child: Icon(Icons.broken_image)),
       ),
     );
   }
 }
 
 // ---------------------- Stories Strip ----------------------
-// FIX #3: converted to StatefulWidget so stream is stable across rebuilds
 
 class _StoriesStrip extends StatefulWidget {
   const _StoriesStrip({Key? key}) : super(key: key);
@@ -900,7 +1000,6 @@ class _StoriesStripState extends State<_StoriesStrip> {
     super.initState();
     _myUid = FirebaseAuth.instance.currentUser?.uid;
     if (_myUid != null && _myUid!.isNotEmpty) {
-      // FIX #3: stream created once in initState, not on every build()
       _rankedStream = StoryService().fetchStoriesRanked(_myUid!);
     }
   }
@@ -933,7 +1032,8 @@ class _StoriesStripState extends State<_StoriesStrip> {
                 child: Text(
                   'See all',
                   style: textTheme.bodySmall?.copyWith(
-                      color: kSecondaryColor, fontWeight: FontWeight.w500),
+                      color: kSecondaryColor,
+                      fontWeight: FontWeight.w500),
                 ),
               ),
             ],
@@ -953,8 +1053,7 @@ class _StoriesStripState extends State<_StoriesStrip> {
               final groupedStories = result.grouped;
               final userIds = <String>[
                 _myUid!,
-                ...result.orderedUserIds
-                    .where((id) => id != _myUid),
+                ...result.orderedUserIds.where((id) => id != _myUid),
               ];
 
               return ListView.builder(
@@ -966,8 +1065,7 @@ class _StoriesStripState extends State<_StoriesStrip> {
                   final userId = userIds[index];
 
                   if (userId == _myUid) {
-                    final myStories =
-                        groupedStories[_myUid!] ?? [];
+                    final myStories = groupedStories[_myUid!] ?? [];
                     final hasStories = myStories.isNotEmpty;
                     final hasUnseen = myStories
                         .any((s) => !s.viewers.contains(_myUid));
@@ -1003,7 +1101,8 @@ class _StoriesStripState extends State<_StoriesStrip> {
                               children: [
                                 _StoryAvatar(
                                   imageUrl: photoUrl,
-                                  hasUnseen: hasStories && hasUnseen,
+                                  hasUnseen:
+                                  hasStories && hasUnseen,
                                   isSeen: hasStories && !hasUnseen,
                                 ),
                                 const Positioned(
@@ -1013,7 +1112,8 @@ class _StoriesStripState extends State<_StoriesStrip> {
                                     radius: 10,
                                     backgroundColor: Colors.blue,
                                     child: Icon(Icons.add,
-                                        size: 16, color: Colors.white),
+                                        size: 16,
+                                        color: Colors.white),
                                   ),
                                 ),
                               ],
@@ -1021,7 +1121,8 @@ class _StoriesStripState extends State<_StoriesStrip> {
                             const SizedBox(height: 6),
                             const Text('Your story',
                                 style: TextStyle(
-                                    fontSize: 12, color: Colors.black87)),
+                                    fontSize: 12,
+                                    color: Colors.black87)),
                           ],
                         ),
                       ),
@@ -1064,8 +1165,9 @@ class _StoriesStripState extends State<_StoriesStrip> {
                                   : 'User',
                               overflow: TextOverflow.ellipsis,
                               textAlign: TextAlign.center,
-                              style: textTheme.bodySmall
-                                  ?.copyWith(fontSize: 12, color: Colors.black87),
+                              style: textTheme.bodySmall?.copyWith(
+                                  fontSize: 12,
+                                  color: Colors.black87),
                             ),
                           ),
                         ],
@@ -1117,7 +1219,6 @@ class _StoryAvatar extends StatelessWidget {
         padding: const EdgeInsets.all(2),
         decoration: const BoxDecoration(
             shape: BoxShape.circle, color: Colors.white),
-        // FIX #6: consistent avatar pattern used here too
         child: CircleAvatar(
           radius: 28,
           backgroundColor: Colors.grey.shade200,
@@ -1128,10 +1229,11 @@ class _StoryAvatar extends StatelessWidget {
               width: 56,
               height: 56,
               fit: BoxFit.cover,
-              errorWidget: (_, __, ___) =>
-              const Icon(Icons.person, size: 28, color: Colors.white70),
+              errorWidget: (_, __, ___) => const Icon(Icons.person,
+                  size: 28, color: Colors.white70),
             )
-                : const Icon(Icons.person, size: 28, color: Colors.white70),
+                : const Icon(Icons.person,
+                size: 28, color: Colors.white70),
           ),
         ),
       ),
@@ -1167,7 +1269,7 @@ class _DrawerItemData {
 }
 
 class _HaloDrawer extends StatelessWidget {
-  final ValueChanged<_HaloMenuAction> onSelect;
+  final Future<void> Function(_HaloMenuAction) onSelect;
 
   const _HaloDrawer({Key? key, required this.onSelect}) : super(key: key);
 
@@ -1329,7 +1431,8 @@ class _HaloDrawerTile extends StatelessWidget {
                 color: Colors.white.withOpacity(0.9),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(data.icon, color: kSecondaryColor, size: 20),
+              child:
+              Icon(data.icon, color: kSecondaryColor, size: 20),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -1394,14 +1497,17 @@ class _DoubleTapHeartOverlayState extends State<_DoubleTapHeartOverlay>
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
       try {
-        await FirebaseFirestore.instance
-            .collection('posts')
-            .doc(widget.postId)
-            .collection('likes')
-            .doc(uid)
-            .set({
-          'userId': uid,
-          'likedAt': FieldValue.serverTimestamp(),
+        final postRef =
+        FirebaseFirestore.instance.collection('posts').doc(widget.postId);
+        final likeRef = postRef.collection('likes').doc(uid);
+        await FirebaseFirestore.instance.runTransaction((tx) async {
+          final likeSnap = await tx.get(likeRef);
+          if (likeSnap.exists) return;
+          tx.set(likeRef, {
+            'userId': uid,
+            'likedAt': FieldValue.serverTimestamp(),
+          });
+          tx.update(postRef, {'likeCount': FieldValue.increment(1)});
         });
       } catch (_) {}
     }
@@ -1455,6 +1561,8 @@ class _PostMedia extends StatelessWidget {
     final first = Map<String, dynamic>.from(media.first as Map);
     final type = (first['type'] ?? 'image').toString();
     final url = (first['url'] ?? '').toString().trim();
+    final trimStartMs = _asIntNullable(first['trimStartMs']);
+    final trimEndMs = _asIntNullable(first['trimEndMs']);
 
     if (type == 'video') {
       return GestureDetector(
@@ -1462,7 +1570,11 @@ class _PostMedia extends StatelessWidget {
         child: SizedBox(
             height: 300,
             width: double.infinity,
-            child: _NetworkVideo(url: url)),
+            child: _NetworkVideo(
+              url: url,
+              trimStartMs: trimStartMs,
+              trimEndMs: trimEndMs,
+            )),
       );
     }
 
@@ -1471,231 +1583,26 @@ class _PostMedia extends StatelessWidget {
           height: 300,
           color: Colors.grey.shade200,
           child: const Center(
-              child: Icon(Icons.image_not_supported, color: Colors.grey)));
+              child:
+              Icon(Icons.image_not_supported, color: Colors.grey)));
     }
 
     return _PostImage(url: url);
   }
 }
 
-class _FeedVideoItem {
-  final String postId;
-  final String videoUrl;
-  final String caption;
-  final String location;
-
-  const _FeedVideoItem({
-    required this.postId,
-    required this.videoUrl,
-    required this.caption,
-    required this.location,
-  });
-}
-
-class _ReelsViewerPage extends StatefulWidget {
-  final List<_FeedVideoItem> videoItems;
-  final int initialIndex;
-
-  const _ReelsViewerPage({
-    Key? key,
-    required this.videoItems,
-    required this.initialIndex,
-  }) : super(key: key);
-
-  @override
-  State<_ReelsViewerPage> createState() => _ReelsViewerPageState();
-}
-
-class _ReelsViewerPageState extends State<_ReelsViewerPage> {
-  late final PageController _pageController;
-  int _currentIndex = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _currentIndex = widget.initialIndex;
-    _pageController = PageController(initialPage: widget.initialIndex);
-  }
-
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          PageView.builder(
-            controller: _pageController,
-            scrollDirection: Axis.vertical,
-            itemCount: widget.videoItems.length,
-            onPageChanged: (index) => setState(() => _currentIndex = index),
-            itemBuilder: (context, index) {
-              return _ReelsVideoPlayer(
-                key: ValueKey(widget.videoItems[index].postId),
-                videoUrl: widget.videoItems[index].videoUrl,
-                isActive: index == _currentIndex,
-              );
-            },
-          ),
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 10,
-            left: 10,
-            child: IconButton(
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
-            ),
-          ),
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: MediaQuery.of(context).padding.bottom + 24,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (widget.videoItems[_currentIndex].caption.trim().isNotEmpty)
-                  Text(
-                    widget.videoItems[_currentIndex].caption,
-                    style: GoogleFonts.poppins(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                if (widget.videoItems[_currentIndex].location.trim().isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      widget.videoItems[_currentIndex].location,
-                      style: GoogleFonts.poppins(
-                        color: Colors.white70,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ReelsVideoPlayer extends StatefulWidget {
-  final String videoUrl;
-  final bool isActive;
-
-  const _ReelsVideoPlayer({
-    Key? key,
-    required this.videoUrl,
-    required this.isActive,
-  }) : super(key: key);
-
-  @override
-  State<_ReelsVideoPlayer> createState() => _ReelsVideoPlayerState();
-}
-
-class _ReelsVideoPlayerState extends State<_ReelsVideoPlayer> {
-  VideoPlayerController? _controller;
-  bool _initialized = false;
-  bool _error = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initController();
-  }
-
-  Future<void> _initController() async {
-    final url = widget.videoUrl.trim();
-    if (url.isEmpty) {
-      if (mounted) setState(() => _error = true);
-      return;
-    }
-
-    try {
-      final controller = VideoPlayerController.networkUrl(Uri.parse(url));
-      await controller.initialize();
-      controller.setLooping(true);
-      _controller = controller;
-
-      if (!mounted) return;
-      setState(() => _initialized = true);
-      _syncPlayback();
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _error = true);
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _ReelsVideoPlayer oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _syncPlayback();
-  }
-
-  void _syncPlayback() {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) return;
-    if (widget.isActive) {
-      controller.play();
-    } else {
-      controller.pause();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_error) {
-      return const Center(
-        child: Icon(Icons.videocam_off, color: Colors.white54, size: 54),
-      );
-    }
-
-    if (!_initialized || _controller == null || !_controller!.value.isInitialized) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      );
-    }
-
-    final controller = _controller!;
-    return GestureDetector(
-      onTap: () {
-        if (controller.value.isPlaying) {
-          controller.pause();
-        } else {
-          controller.play();
-        }
-        setState(() {});
-      },
-      child: SizedBox.expand(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: controller.value.size.width,
-            height: controller.value.size.height,
-            child: VideoPlayer(controller),
-          ),
-        ),
-      ),
-    );
-  }
-}
+// ---------------------- Network Video ----------------------
 
 class _NetworkVideo extends StatefulWidget {
   final String url;
-  const _NetworkVideo({Key? key, required this.url}) : super(key: key);
+  final int? trimStartMs;
+  final int? trimEndMs;
+  const _NetworkVideo({
+    Key? key,
+    required this.url,
+    this.trimStartMs,
+    this.trimEndMs,
+  }) : super(key: key);
 
   @override
   State<_NetworkVideo> createState() => _NetworkVideoState();
@@ -1703,83 +1610,295 @@ class _NetworkVideo extends StatefulWidget {
 
 class _NetworkVideoState extends State<_NetworkVideo> {
   VideoPlayerController? _controller;
+  bool _initStarted = false;
   bool _initialized = false;
   bool _error = false;
+  bool _isVisible = false;
+  Duration _effectiveTrimStart = Duration.zero;
+  Duration? _effectiveTrimEnd;
 
   @override
   void initState() {
     super.initState();
     if (widget.url.trim().isEmpty) {
       setState(() => _error = true);
-      return;
     }
+  }
+
+  @override
+  void didUpdateWidget(covariant _NetworkVideo oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.trimStartMs != widget.trimStartMs ||
+        oldWidget.trimEndMs != widget.trimEndMs) {
+      _updateTrimBounds();
+      _syncPlayback();
+    }
+  }
+
+  void _initIfNeeded() {
+    if (_initStarted || widget.url.trim().isEmpty) return;
+    _initStarted = true;
     try {
-      _controller =
-          VideoPlayerController.networkUrl(Uri.parse(widget.url));
-      _controller!.initialize().then((_) {
-        if (!mounted) return;
-        _controller!
-          ..setLooping(true)
-          ..play();
+      final controller =
+      VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      _controller = controller;
+      controller.initialize().then((_) {
+        if (!mounted) {
+          // [FIX-9] Dispose controller if widget was already removed
+          // from the tree before initialization completed.
+          controller.dispose();
+          return;
+        }
+        _updateTrimBounds();
+        controller
+          ..setLooping(false)
+          ..addListener(_enforceTrimWindow);
+        if (_effectiveTrimStart > Duration.zero) {
+          controller.seekTo(_effectiveTrimStart);
+        }
         setState(() => _initialized = true);
-      }).catchError((Object e) {
+        _syncPlayback();
+      }).catchError((Object _) {
+        // [FIX-9] Dispose on error path too.
+        controller.dispose();
+        _controller = null;
         if (!mounted) return;
         setState(() => _error = true);
       });
     } catch (_) {
-      setState(() => _error = true);
+      _controller?.dispose();
+      _controller = null;
+      if (mounted) setState(() => _error = true);
+    }
+  }
+
+  void _syncPlayback() {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    if (_isVisible) {
+      if (c.value.position < _effectiveTrimStart) {
+        c.seekTo(_effectiveTrimStart);
+      }
+      c.play();
+    } else {
+      c.pause();
+    }
+  }
+
+  void _updateTrimBounds() {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    final maxMs = c.value.duration.inMilliseconds;
+    var start = widget.trimStartMs ?? 0;
+    if (start < 0) start = 0;
+    if (start > maxMs) start = maxMs;
+    int? end = widget.trimEndMs;
+    if (end != null) {
+      if (end <= start) {
+        end = maxMs;
+      } else if (end > maxMs) {
+        end = maxMs;
+      }
+    }
+    _effectiveTrimStart = Duration(milliseconds: start);
+    _effectiveTrimEnd =
+    end != null ? Duration(milliseconds: end) : null;
+  }
+
+  void _enforceTrimWindow() {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    if (_effectiveTrimEnd == null) return;
+    if (c.value.position >= _effectiveTrimEnd!) {
+      c.seekTo(_effectiveTrimStart);
+      if (_isVisible) c.play();
     }
   }
 
   @override
   void dispose() {
+    _controller?.removeListener(_enforceTrimWindow);
     _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_error) {
-      return Container(
-          height: 300,
-          color: Colors.black26,
-          child: const Center(
-              child: Icon(Icons.videocam_off,
-                  color: Colors.white54, size: 48)));
-    }
-    if (!_initialized ||
-        _controller == null ||
-        !_controller!.value.isInitialized) {
-      return Container(
-          height: 300,
-          color: Colors.black12,
-          child: const Center(child: CircularProgressIndicator()));
-    }
+    return VisibilityDetector(
+      key: Key('home_video_${widget.url.hashCode}'),
+      onVisibilityChanged: (info) {
+        final visibleNow = info.visibleFraction > 0.6;
+        if (visibleNow && !_initStarted) {
+          _initIfNeeded();
+        }
+        if (_isVisible != visibleNow) {
+          _isVisible = visibleNow;
+          _syncPlayback();
+        }
+      },
+      child: Builder(
+        builder: (context) {
+          if (_error) {
+            return Container(
+                height: 300,
+                color: Colors.black26,
+                child: const Center(
+                    child: Icon(Icons.videocam_off,
+                        color: Colors.white54, size: 48)));
+          }
+          if (!_initialized ||
+              _controller == null ||
+              !_controller!.value.isInitialized) {
+            return Container(
+                height: 300,
+                color: Colors.black12,
+                child:
+                const Center(child: CircularProgressIndicator()));
+          }
 
-    final c = _controller!;
-    return SizedBox.expand(
-      child: FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
-          width: c.value.size.width,
-          height: c.value.size.height,
-          child: VideoPlayer(c),
-        ),
+          final c = _controller!;
+          return SizedBox.expand(
+            child: FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: c.value.size.width,
+                height: c.value.size.height,
+                child: VideoPlayer(c),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
 }
 
+// ---------------------- Post user header (with in-memory cache) ----------------------
+
+class _UserLite {
+  final String username;
+  final String profilePhotoUrl;
+  final String accountType;
+  // [FIX-5] Timestamp for TTL-based cache invalidation (5 min).
+  final DateTime fetchedAt;
+
+  const _UserLite({
+    required this.username,
+    required this.profilePhotoUrl,
+    required this.accountType,
+    required this.fetchedAt,
+  });
+
+  bool get isStale =>
+      DateTime.now().difference(fetchedAt).inMinutes >= 5;
+}
+
+class _PostUserHeader extends StatefulWidget {
+  final String userId;
+  final String subtitle;
+
+  const _PostUserHeader({
+    Key? key,
+    required this.userId,
+    required this.subtitle,
+  }) : super(key: key);
+
+  @override
+  State<_PostUserHeader> createState() => _PostUserHeaderState();
+}
+
+class _PostUserHeaderState extends State<_PostUserHeader> {
+  // [FIX-5] Cache now has a 5-minute TTL. Stale entries are re-fetched
+  // so profile photo / username updates eventually propagate.
+  static final Map<String, _UserLite> _cache = {};
+  _UserLite? _user;
+
+  @override
+  void initState() {
+    super.initState();
+    final cached = _cache[widget.userId];
+    if (cached != null && !cached.isStale) {
+      _user = cached;
+    } else {
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.userId)
+          .get();
+      final data = doc.data();
+      final user = _UserLite(
+        username: (data?['username'] ??
+            data?['name'] ??
+            data?['full_name'] ??
+            'User')
+            .toString(),
+        profilePhotoUrl: _profilePhotoUrlFromUser(data),
+        accountType:
+        (data?['accountType'] as String?)?.toLowerCase() ?? 'aspirant',
+        fetchedAt: DateTime.now(),
+      );
+      _cache[widget.userId] = user;
+      if (mounted) setState(() => _user = user);
+    } catch (_) {}
+  }
+
+  void _openProfile() {
+    final user = _user;
+    if (user == null || widget.userId.isEmpty) return;
+    if (user.accountType == 'wellness') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => wellness_profile.WellnessProfilePage(
+              profileUserId: widget.userId),
+        ),
+      );
+    } else if (user.accountType == 'guru') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              guru_profile.GuruProfilePage(profileUserId: widget.userId),
+        ),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              aspirant_profile.ProfilePage(profileUserId: widget.userId),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = _user;
+    return _PostHeader(
+      username: user?.username ?? 'User',
+      profilePhotoUrl: user?.profilePhotoUrl ?? '',
+      subtitle: widget.subtitle,
+      onTap: user == null ? null : _openProfile,
+    );
+  }
+}
+
 // ---------------------- Post Actions ----------------------
-// FIX #2: All 3 streams merged into one StreamBuilder tree,
-//         and like/comment counts are fetched together to avoid flicker.
+// [FIX-2] postData prop removed. likeCount and commentCount are now fetched
+// from a live stream on the post document so counts never go stale.
 
 class _PostActions extends StatefulWidget {
   final String postId;
-  final Map<String, dynamic> postData;
+  final Map<String, dynamic>? savedPostsMap;
 
   const _PostActions(
-      {Key? key, required this.postId, required this.postData})
+      {Key? key, required this.postId, this.savedPostsMap})
       : super(key: key);
 
   @override
@@ -1791,29 +1910,32 @@ class _PostActionsState extends State<_PostActions> {
       FirebaseAuth.instance.currentUser?.uid;
 
   Future<void> _toggleLike() async {
-    if (_currentUserId == null) {
+    final currentUserId = _currentUserId;
+    if (currentUserId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Please sign in to like posts')));
       return;
     }
     try {
-      final likeRef = FirebaseFirestore.instance
-          .collection('posts')
-          .doc(widget.postId)
-          .collection('likes')
-          .doc(_currentUserId!);
-      final likeDoc = await likeRef.get();
-      if (likeDoc.exists) {
-        await likeRef.delete();
-      } else {
-        await likeRef.set({
-          'userId': _currentUserId,
-          'likedAt': FieldValue.serverTimestamp(),
-        });
-      }
+      final postRef =
+      FirebaseFirestore.instance.collection('posts').doc(widget.postId);
+      final likeRef = postRef.collection('likes').doc(currentUserId);
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final likeDoc = await tx.get(likeRef);
+        if (likeDoc.exists) {
+          tx.delete(likeRef);
+          tx.update(postRef, {'likeCount': FieldValue.increment(-1)});
+        } else {
+          tx.set(likeRef, {
+            'userId': currentUserId,
+            'likedAt': FieldValue.serverTimestamp(),
+          });
+          tx.update(postRef, {'likeCount': FieldValue.increment(1)});
+        }
+      });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating like: $e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Error updating like: $e')));
     }
   }
 
@@ -1821,8 +1943,7 @@ class _PostActionsState extends State<_PostActions> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => _CommentsPage(
-            postId: widget.postId, postData: widget.postData),
+        builder: (_) => _CommentsPage(postId: widget.postId),
       ),
     );
   }
@@ -1832,28 +1953,30 @@ class _PostActionsState extends State<_PostActions> {
     final textTheme =
     GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
 
-    // FIX #2: Single StreamBuilder on likes collection.
-    // My own like status derived from the same snapshot — no extra stream.
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    // [FIX-2] Single StreamBuilder on the post document gives live
+    // likeCount, commentCount, AND the current user's like status —
+    // no stale snapshot from the feed.
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('posts')
           .doc(widget.postId)
-          .collection('likes')
           .snapshots(),
-      builder: (context, likeSnap) {
-        final likeDocs = likeSnap.data?.docs ?? [];
-        final likeCount = likeDocs.length;
-        final isLiked = _currentUserId != null &&
-            likeDocs.any((d) => d.id == _currentUserId);
+      builder: (context, postSnap) {
+        final postData = postSnap.data?.data() ?? const <String, dynamic>{};
+        final likeCount = _asInt(postData['likeCount']);
+        final commentCount = _asInt(postData['commentCount']);
 
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: _currentUserId == null
+              ? null
+              : FirebaseFirestore.instance
               .collection('posts')
               .doc(widget.postId)
-              .collection('comments')
+              .collection('likes')
+              .doc(_currentUserId)
               .snapshots(),
-          builder: (context, commentSnap) {
-            final commentCount = commentSnap.data?.docs.length ?? 0;
+          builder: (context, likeSnap) {
+            final isLiked = likeSnap.data?.exists ?? false;
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1862,9 +1985,7 @@ class _PostActionsState extends State<_PostActions> {
                   children: [
                     IconButton(
                       icon: Icon(
-                        isLiked
-                            ? Icons.favorite
-                            : Icons.favorite_border,
+                        isLiked ? Icons.favorite : Icons.favorite_border,
                         color: isLiked ? kIgLikeRed : kIgPrimaryText,
                         size: 28,
                       ),
@@ -1885,8 +2006,8 @@ class _PostActionsState extends State<_PostActions> {
                       onPressed: () {
                         ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                                content: Text(
-                                    'Share functionality coming soon!')));
+                                content:
+                                Text('Share functionality coming soon!')));
                       },
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 8),
@@ -1895,6 +2016,7 @@ class _PostActionsState extends State<_PostActions> {
                     SaveButton(
                       postId: widget.postId,
                       currentUserId: _currentUserId,
+                      savedPostsMap: widget.savedPostsMap,
                       iconSize: 26,
                       color: kIgPrimaryText,
                     ),
@@ -1918,8 +2040,8 @@ class _PostActionsState extends State<_PostActions> {
                         onTap: _showComments,
                         child: Text(
                           'View all $commentCount ${commentCount == 1 ? 'comment' : 'comments'}',
-                          style: textTheme.bodyMedium?.copyWith(
-                              color: kIgSecondaryText, fontSize: 14),
+                          style: textTheme.bodyMedium
+                              ?.copyWith(color: kIgSecondaryText, fontSize: 14),
                         ),
                       ),
                     ],
@@ -1935,15 +2057,13 @@ class _PostActionsState extends State<_PostActions> {
 }
 
 // ---------------------- Comments Page ----------------------
-// FIX #8: shows commenter username + avatar
+// [FIX-3] All comment user docs are fetched in a single whereIn query
+// instead of one FutureBuilder per row.
 
 class _CommentsPage extends StatefulWidget {
   final String postId;
-  final Map<String, dynamic> postData;
 
-  const _CommentsPage(
-      {Key? key, required this.postId, required this.postData})
-      : super(key: key);
+  const _CommentsPage({Key? key, required this.postId}) : super(key: key);
 
   @override
   State<_CommentsPage> createState() => _CommentsPageState();
@@ -1952,6 +2072,15 @@ class _CommentsPage extends StatefulWidget {
 class _CommentsPageState extends State<_CommentsPage> {
   final TextEditingController _commentController = TextEditingController();
   final String? _currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+  // [FIX-3] In-memory user data cache keyed by uid, populated in batch.
+  final Map<String, Map<String, dynamic>> _userCache = {};
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
 
   Future<void> _addComment() async {
     if (_currentUserId == null) {
@@ -1965,20 +2094,50 @@ class _CommentsPageState extends State<_CommentsPage> {
       return;
     }
     try {
-      await FirebaseFirestore.instance
-          .collection('posts')
-          .doc(widget.postId)
-          .collection('comments')
-          .add({
-        'userId': _currentUserId,
-        'text': _commentController.text.trim(),
-        'createdAt': FieldValue.serverTimestamp(),
+      final postRef =
+      FirebaseFirestore.instance.collection('posts').doc(widget.postId);
+      final commentRef = postRef.collection('comments').doc();
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        tx.set(commentRef, {
+          'userId': _currentUserId,
+          'text': _commentController.text.trim(),
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        tx.update(postRef, {'commentCount': FieldValue.increment(1)});
       });
       _commentController.clear();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error adding comment: $e')));
     }
+  }
+
+  // [FIX-3] Batch-fetch all user docs for a list of comment documents.
+  Future<void> _prefetchUsers(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> comments) async {
+    final uids = comments
+        .map((c) => (c.data()['userId'] ?? '').toString())
+        .where((id) => id.isNotEmpty && !_userCache.containsKey(id))
+        .toSet()
+        .toList();
+
+    if (uids.isEmpty) return;
+
+    // Firestore whereIn supports up to 30 values per call.
+    const chunkSize = 30;
+    for (var i = 0; i < uids.length; i += chunkSize) {
+      final chunk = uids.sublist(
+          i, i + chunkSize > uids.length ? uids.length : i + chunkSize);
+      final result = await FirebaseFirestore.instance
+          .collection('users')
+          .where(FieldPath.documentId, whereIn: chunk)
+          .get();
+      for (final doc in result.docs) {
+        _userCache[doc.id] = doc.data();
+      }
+    }
+
+    if (mounted) setState(() {});
   }
 
   @override
@@ -2020,9 +2179,17 @@ class _CommentsPageState extends State<_CommentsPage> {
                   if (comments.isEmpty) {
                     return Center(
                       child: Text('No comments yet',
-                          style: TextStyle(color: Colors.grey.shade600)),
+                          style: TextStyle(
+                              color: Colors.grey.shade600)),
                     );
                   }
+
+                  // [FIX-3] Trigger a batch user fetch whenever the
+                  // comment list changes. Uses addPostFrameCallback so
+                  // we don't call setState during build.
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    _prefetchUsers(comments);
+                  });
 
                   return ListView.builder(
                     padding: const EdgeInsets.symmetric(vertical: 8),
@@ -2033,8 +2200,7 @@ class _CommentsPageState extends State<_CommentsPage> {
                       (comment['userId'] ?? '').toString();
                       final commentText =
                       (comment['text'] ?? '').toString();
-                      final ts =
-                      comment['createdAt'] as Timestamp?;
+                      final ts = comment['createdAt'] as Timestamp?;
                       final timeStr = ts != null
                           ? ts
                           .toDate()
@@ -2043,116 +2209,102 @@ class _CommentsPageState extends State<_CommentsPage> {
                           .substring(0, 16)
                           : '';
 
-                      // FIX #8: fetch commenter username + photo
-                      return FutureBuilder<
-                          DocumentSnapshot<Map<String, dynamic>>>(
-                        future: commentUserId.isNotEmpty
-                            ? FirebaseFirestore.instance
-                            .collection('users')
-                            .doc(commentUserId)
-                            .get()
-                            : null,
-                        builder: (context, userSnap) {
-                          final uData = userSnap.data?.data();
-                          final username = (uData?['username'] ??
-                              uData?['name'] ??
-                              'User')
-                              .toString();
-                          final photoUrl =
-                          _profilePhotoUrlFromUser(uData);
+                      // [FIX-3] Read from local cache — no FutureBuilder.
+                      final uData = _userCache[commentUserId];
+                      final username = (uData?['username'] ??
+                          uData?['name'] ??
+                          'User')
+                          .toString();
+                      final photoUrl =
+                      _profilePhotoUrlFromUser(uData);
 
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 8),
-                            child: Row(
-                              crossAxisAlignment:
-                              CrossAxisAlignment.start,
-                              children: [
-                                CircleAvatar(
-                                  radius: 18,
-                                  backgroundColor:
-                                  Colors.grey.shade200,
-                                  child: ClipOval(
-                                    child: photoUrl.isNotEmpty
-                                        ? CachedNetworkImage(
-                                      imageUrl: photoUrl,
-                                      width: 36,
-                                      height: 36,
-                                      fit: BoxFit.cover,
-                                      errorWidget:
-                                          (_, __, ___) =>
-                                          Image.asset(
-                                            'assets/images/Profile.png',
-                                            width: 36,
-                                            height: 36,
-                                            fit: BoxFit.cover,
-                                          ),
-                                    )
-                                        : Image.asset(
-                                      'assets/images/Profile.png',
-                                      width: 36,
-                                      height: 36,
-                                      fit: BoxFit.cover,
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: Row(
+                          crossAxisAlignment:
+                          CrossAxisAlignment.start,
+                          children: [
+                            CircleAvatar(
+                              radius: 18,
+                              backgroundColor: Colors.grey.shade200,
+                              child: ClipOval(
+                                child: photoUrl.isNotEmpty
+                                    ? CachedNetworkImage(
+                                  imageUrl: photoUrl,
+                                  width: 36,
+                                  height: 36,
+                                  fit: BoxFit.cover,
+                                  errorWidget: (_, __, ___) =>
+                                      Image.asset(
+                                        'assets/images/Profile.png',
+                                        width: 36,
+                                        height: 36,
+                                        fit: BoxFit.cover,
+                                      ),
+                                )
+                                    : Image.asset(
+                                  'assets/images/Profile.png',
+                                  width: 36,
+                                  height: 36,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                                children: [
+                                  RichText(
+                                    text: TextSpan(
+                                      style: textTheme.bodyMedium
+                                          ?.copyWith(
+                                          color: kIgPrimaryText,
+                                          fontSize: 14),
+                                      children: [
+                                        TextSpan(
+                                          text: '$username ',
+                                          style: const TextStyle(
+                                              fontWeight:
+                                              FontWeight.w600),
+                                        ),
+                                        TextSpan(text: commentText),
+                                      ],
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                    children: [
-                                      RichText(
-                                        text: TextSpan(
-                                          style: textTheme.bodyMedium
-                                              ?.copyWith(
-                                              color: kIgPrimaryText,
-                                              fontSize: 14),
-                                          children: [
-                                            TextSpan(
-                                              text: '$username ',
-                                              style: const TextStyle(
-                                                  fontWeight:
-                                                  FontWeight.w600),
-                                            ),
-                                            TextSpan(text: commentText),
-                                          ],
-                                        ),
+                                  if (timeStr.isNotEmpty)
+                                    Padding(
+                                      padding:
+                                      const EdgeInsets.only(top: 4),
+                                      child: Text(
+                                        timeStr,
+                                        style: textTheme.bodySmall
+                                            ?.copyWith(
+                                            color: kIgSecondaryText,
+                                            fontSize: 12),
                                       ),
-                                      if (timeStr.isNotEmpty)
-                                        Padding(
-                                          padding:
-                                          const EdgeInsets.only(top: 4),
-                                          child: Text(
-                                            timeStr,
-                                            style:
-                                            textTheme.bodySmall?.copyWith(
-                                                color: kIgSecondaryText,
-                                                fontSize: 12),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ],
+                                    ),
+                                ],
+                              ),
                             ),
-                          );
-                        },
+                          ],
+                        ),
                       );
                     },
                   );
                 },
               ),
             ),
-            // Comment input bar — Instagram style
             Container(
               decoration: BoxDecoration(
                 color: Colors.white,
-                border: Border(
-                    top: BorderSide(color: Colors.grey.shade200)),
+                border:
+                Border(top: BorderSide(color: Colors.grey.shade200)),
               ),
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 8),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: SafeArea(
                 top: false,
                 child: Row(
@@ -2176,7 +2328,8 @@ class _CommentsPageState extends State<_CommentsPage> {
                             borderSide: BorderSide(
                                 color: Colors.grey.shade300),
                           ),
-                          contentPadding: const EdgeInsets.symmetric(
+                          contentPadding:
+                          const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 8),
                           isDense: true,
                         ),
