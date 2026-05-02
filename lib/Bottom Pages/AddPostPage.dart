@@ -9,13 +9,14 @@ import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:video_player/video_player.dart';
 import 'package:location/location.dart' as loc;
 import 'package:geocoding/geocoding.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
 import 'package:http/http.dart' as http;
+import 'package:halo/services/upload_service.dart';
 import 'video_quick_edit_page.dart';
+import 'video_thumbnail_picker.dart';
 
 // ── Theme ──────────────────────────────────────────────────────────────────
 const Color kPrimaryColor   = Color(0xFFA58CE3);
@@ -66,6 +67,7 @@ class _AddPostPageState extends State<AddPostPage>
   final _captionFocusNode  = FocusNode();
   final _locationFocusNode = FocusNode();
   final _picker            = ImagePicker();
+  final UploadService _uploadService = UploadService();
 
   // Media
   final List<MediaItem> _media = [];
@@ -212,26 +214,41 @@ class _AddPostPageState extends State<AddPostPage>
       return;
     }
 
+    // STEP 1: Pick video
     final file = await _picker.pickVideo(
       source: ImageSource.gallery,
       maxDuration: const Duration(minutes: 3),
     );
+
     if (file == null) return;
 
+    // STEP 2: Open edit screen
     final edited = await Navigator.push<VideoQuickEditResult>(
       context,
       MaterialPageRoute(
         builder: (_) => VideoQuickEditPage(file: File(file.path)),
       ),
     );
+
+    // ✅ Important null check
     if (edited == null || !mounted) return;
 
+    // STEP 3: Open thumbnail picker (AFTER edited)
+    final thumbBytes = await Navigator.push<Uint8List>(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            VideoThumbnailPicker(videoPath: edited.file.path),
+      ),
+    );
+
+    // STEP 4: Save media
     setState(() {
       _media.add(
         MediaItem(
           file: XFile(edited.file.path),
           type: MediaType.video,
-          videoCoverBytes: edited.coverBytes,
+          videoCoverBytes: thumbBytes ?? edited.coverBytes,
           trimStartMs: edited.trimStartMs,
           trimEndMs: edited.trimEndMs,
         ),
@@ -512,11 +529,11 @@ class _AddPostPageState extends State<AddPostPage>
       final postId    = FirebaseFirestore.instance.collection('posts').doc().id;
       final mediaList = <Map<String, dynamic>>[];
       String firstThumbUrl = '';
+      String legacyFirstImageUrl = '';
+      String legacyFirstVideoUrl = '';
 
       for (int i = 0; i < _media.length; i++) {
         final item = _media[i];
-        final ext  = item.isVideo ? 'mp4' : 'jpg';
-        final path = 'users/$userId/posts/$postId-$i.$ext';
 
         setState(() {
           _currentUploadIdx = i + 1;
@@ -524,41 +541,50 @@ class _AddPostPageState extends State<AddPostPage>
           'Uploading ${item.isVideo ? "video" : "photo"} ${i + 1} of ${_media.length}…';
         });
 
-        final ref  = FirebaseStorage.instance.ref(path);
-        final task = ref.putFile(File(item.file.path));
-
-        StreamSubscription? sub;
-        sub = task.snapshotEvents.listen((snap) {
-          if (!mounted) return;
-          final fileProgress =
-              snap.bytesTransferred / snap.totalBytes.clamp(1, double.infinity);
-          setState(() =>
-          _uploadProgress = (i + fileProgress) / _media.length);
-        });
-
-        await task;
-        sub.cancel();
-
-        final url = await ref.getDownloadURL();
-        String thumbnailUrl = '';
-        if (item.isVideo && item.videoCoverBytes != null && item.videoCoverBytes!.isNotEmpty) {
-          final thumbRef = FirebaseStorage.instance.ref('users/$userId/posts/$postId-$i-thumb.jpg');
-          await thumbRef.putData(
-            item.videoCoverBytes!,
-            SettableMetadata(contentType: 'image/jpeg'),
+        Map<String, dynamic> uploaded;
+        if (item.isVideo) {
+          uploaded = await _uploadService.uploadVideoWithThumbnail(
+            videoFile: File(item.file.path),
+            postId: postId,
+            index: i,
+            thumbnailBytes: item.videoCoverBytes,
+            trimStartMs: item.trimStartMs,
+            trimEndMs: item.trimEndMs,
           );
-          thumbnailUrl = await thumbRef.getDownloadURL();
+          if (legacyFirstVideoUrl.isEmpty) {
+            legacyFirstVideoUrl = (uploaded['videoUrl'] ?? '').toString();
+          }
+          if (firstThumbUrl.isEmpty) {
+            firstThumbUrl =
+                (uploaded['thumbnail'] ?? uploaded['thumbnailUrl'] ?? '')
+                    .toString()
+                    .trim();
+          }
+        } else {
+          uploaded = await _uploadService.uploadAdaptivePostImage(
+            imageFile: File(item.file.path),
+            postId: postId,
+            index: i,
+          );
+          if (legacyFirstImageUrl.isEmpty) {
+            legacyFirstImageUrl = (uploaded['medium'] ?? uploaded['url'] ?? '')
+                .toString()
+                .trim();
+          }
+          if (firstThumbUrl.isEmpty) {
+            firstThumbUrl = (uploaded['thumb'] ??
+                    uploaded['medium'] ??
+                    uploaded['full'] ??
+                    uploaded['url'] ??
+                    '')
+                .toString()
+                .trim();
+          }
         }
+        mediaList.add(uploaded);
 
-        mediaList.add({
-          'type': item.isVideo ? 'video' : 'image',
-          'url': url,
-          if (thumbnailUrl.isNotEmpty) 'thumbnailUrl': thumbnailUrl,
-          if (item.trimStartMs != null) 'trimStartMs': item.trimStartMs,
-          if (item.trimEndMs != null) 'trimEndMs': item.trimEndMs,
-        });
-        if (firstThumbUrl.isEmpty) {
-          firstThumbUrl = item.isVideo ? thumbnailUrl : url;
+        if (mounted) {
+          setState(() => _uploadProgress = (i + 1) / _media.length);
         }
       }
 
@@ -581,9 +607,15 @@ class _AddPostPageState extends State<AddPostPage>
         'location' : _locationCtrl.text.trim(),
         'mentions' : _extractMentions(caption),
         'thumbnailUrl': firstThumbUrl,
+        if (legacyFirstImageUrl.isNotEmpty) 'imageUrl': legacyFirstImageUrl,
+        if (legacyFirstVideoUrl.isNotEmpty) 'videoUrl': legacyFirstVideoUrl,
+        'hasMedia': mediaList.isNotEmpty,
+        'isVideo': mediaList.any((m) => (m['type'] ?? '') == 'video'),
         'likeCount': 0,
         'commentCount': 0,
-        'createdAt': FieldValue.serverTimestamp(),
+        // Keep createdAt always non-null for feed queries.
+        'createdAt': Timestamp.now(),
+        'createdAtServer': FieldValue.serverTimestamp(),
         'timestamp': FieldValue.serverTimestamp(),
       });
 

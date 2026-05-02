@@ -17,6 +17,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
@@ -25,7 +26,9 @@ import 'package:halo/Profile%20Pages/wellness_profile_page.dart' as wellness_pro
 import 'package:halo/Profile%20Pages/aspirant_profile_page.dart' as aspirant_profile;
 import 'package:halo/Profile%20Pages/guru_profile_page.dart' as guru_profile;
 import 'package:halo/widgets/save_button.dart';
-import 'package:halo/services/explore_service.dart';
+import 'package:halo/services/save_service.dart';
+import 'package:halo/models/media_model.dart';
+import 'package:halo/services/app_cache_manager.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -43,14 +46,61 @@ const int   _kPageSize   = 10;
 class PostMediaItem {
   final String url;
   final bool isVideo;
+  final String thumb;
+  final String medium;
+  final String full;
+  final String videoUrl;
+  final String thumbnail;
   final int? trimStartMs;
   final int? trimEndMs;
   const PostMediaItem({
     required this.url,
     required this.isVideo,
+    this.thumb = '',
+    this.medium = '',
+    this.full = '',
+    this.videoUrl = '',
+    this.thumbnail = '',
     this.trimStartMs,
     this.trimEndMs,
   });
+
+  String forGrid() {
+    if (isVideo) {
+      if (thumbnail.isNotEmpty) return thumbnail;
+      if (thumb.isNotEmpty) return thumb;
+      return url;
+    }
+    if (thumb.isNotEmpty) return thumb;
+    if (medium.isNotEmpty) return medium;
+    if (full.isNotEmpty) return full;
+    return url;
+  }
+
+  String forFeed() {
+    if (isVideo) return videoUrl.isNotEmpty ? videoUrl : url;
+    if (medium.isNotEmpty) return medium;
+    if (full.isNotEmpty) return full;
+    if (thumb.isNotEmpty) return thumb;
+    return url;
+  }
+
+  String forFullscreen() {
+    if (isVideo) return videoUrl.isNotEmpty ? videoUrl : url;
+    if (full.isNotEmpty) return full;
+    if (medium.isNotEmpty) return medium;
+    if (thumb.isNotEmpty) return thumb;
+    return url;
+  }
+
+  String forFullscreenByDevice(bool preferFull) {
+    if (isVideo) return videoUrl.isNotEmpty ? videoUrl : url;
+    if (preferFull) return forFullscreen();
+    if (medium.isNotEmpty) return medium;
+    if (full.isNotEmpty) return full;
+    if (thumb.isNotEmpty) return thumb;
+    return url;
+  }
 }
 
 class PostModel {
@@ -59,11 +109,22 @@ class PostModel {
   final String caption;
   final String location;
   final List<String> tags;
+  final List<String> tagsLower;
   final List<PostMediaItem> mediaItems;
   final DateTime? createdAt;
   final String thumbnailUrl;
   final int likeCount;
   final int commentCount;
+
+  // Precomputed fields to avoid repeated runtime calculations during scroll.
+  final bool isVideo;
+  final bool hasMedia;
+  final String firstImageUrl;
+  final String firstVideoUrl;
+  final PostMediaItem? firstVideoItem;
+
+  final String captionLower;
+  final String locationLower;
 
   const PostModel({
     required this.id,
@@ -71,89 +132,164 @@ class PostModel {
     required this.caption,
     required this.location,
     required this.tags,
+    required this.tagsLower,
     required this.mediaItems,
     this.createdAt,
     this.thumbnailUrl = '',
     this.likeCount = 0,
     this.commentCount = 0,
+    required this.isVideo,
+    required this.hasMedia,
+    required this.firstImageUrl,
+    required this.firstVideoUrl,
+    required this.firstVideoItem,
+    required this.captionLower,
+    required this.locationLower,
   });
-
-  bool get isVideo  => mediaItems.any((m) => m.isVideo);
-  bool get hasMedia => mediaItems.isNotEmpty;
-
-  String get firstImageUrl {
-    for (final m in mediaItems) { if (!m.isVideo) return m.url; }
-    return '';
-  }
-
-  String get firstVideoUrl {
-    for (final m in mediaItems) { if (m.isVideo) return m.url; }
-    return '';
-  }
-
-  PostMediaItem? get firstVideoItem {
-    for (final m in mediaItems) {
-      if (m.isVideo) return m;
-    }
-    return null;
-  }
 
   factory PostModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
+    final parsedTags = _safeStringList(data['tags']);
+    final parsedMedia = _parseMediaItems(data);
+    final parsedIsVideo = parsedMedia.any((m) => m.isVideo);
+    final parsedHasMedia = parsedMedia.isNotEmpty;
+    final parsedFirstImageItem = parsedMedia.firstWhere(
+      (m) => !m.isVideo,
+      orElse: () => const PostMediaItem(url: '', isVideo: false),
+    );
+    final parsedImages = _safeStringList(data['images']);
+    final parsedFirstImageUrl = parsedFirstImageItem.forGrid().isNotEmpty
+        ? parsedFirstImageItem.forGrid()
+        : (parsedImages.isNotEmpty
+            ? parsedImages.first
+            : (data['imageUrl'] ?? data['thumbnailUrl'] ?? '').toString());
+    final parsedFirstVideoItem =
+        parsedMedia.firstWhere((m) => m.isVideo, orElse: () => const PostMediaItem(url: '', isVideo: false));
+    final parsedFirstVideoUrl =
+    parsedIsVideo && parsedFirstVideoItem.forFeed().isNotEmpty
+        ? parsedFirstVideoItem.forFeed()
+        : parsedFirstVideoItem.url;
+    final parsedFirstVideoItemNullable = parsedIsVideo ? parsedFirstVideoItem : null;
+
     return PostModel(
       id:         doc.id,
       userId:     (data['userId'] ?? '').toString(),
       caption:    (data['caption'] ?? '').toString(),
       location:   (data['location'] ?? '').toString(),
-      tags:       _safeStringList(data['tags']),
-      mediaItems: _parseMediaItems(data),
+      tags:       parsedTags,
+      tagsLower: parsedTags.map((t) => t.toLowerCase()).toList(growable: false),
+      mediaItems: parsedMedia,
       createdAt:  (data['createdAt'] as Timestamp?)?.toDate(),
       thumbnailUrl: (data['thumbnailUrl'] ?? '').toString().trim(),
       likeCount: _asInt(data['likeCount']),
       commentCount: _asInt(data['commentCount']),
+      isVideo: parsedIsVideo,
+      hasMedia: parsedHasMedia,
+      firstImageUrl: parsedFirstImageUrl,
+      firstVideoUrl: parsedFirstVideoUrl,
+      firstVideoItem: parsedFirstVideoItemNullable,
+      captionLower: (data['caption'] ?? '').toString().toLowerCase(),
+      locationLower: (data['location'] ?? '').toString().toLowerCase(),
     );
   }
 
   static List<PostMediaItem> _parseMediaItems(Map<String, dynamic> data) {
-    final out = <PostMediaItem>[];
 
-    final media = data['media'];
-    if (media is List) {
-      for (final m in media) {
-        if (m is Map) {
-          final url = (m['url'] ?? '').toString().trim();
-          if (url.isEmpty) continue;
-          final t = (m['type'] ?? '').toString().toLowerCase();
-          out.add(PostMediaItem(
-            url: url,
-            isVideo: t == 'video' || url.contains('.mp4'),
-            trimStartMs: _asIntNullable(m['trimStartMs']),
-            trimEndMs: _asIntNullable(m['trimEndMs']),
-          ));
-        }
-      }
-    }
-    if (out.isNotEmpty) return out;
+    // ✅ PRIORITY 1: images[] (ALWAYS FIRST)
+    if (data['images'] is List && (data['images'] as List).isNotEmpty) {
+      final list = data['images'] as List;
 
-    final imageUrl = data['imageUrl']?.toString() ?? '';
-    if (imageUrl.isNotEmpty) {
-      out.add(PostMediaItem(url: imageUrl, isVideo: false));
-      return out;
+      return list.map((url) {
+        final u = url.toString();
+        return PostMediaItem(
+          url: u,
+          isVideo: false,
+          thumb: u,
+          medium: u,
+          full: u,
+        );
+      }).toList(growable: false);
     }
 
-    final images = data['images'];
-    if (images is List) {
-      for (final img in images) {
-        final url = img?.toString() ?? '';
-        if (url.isNotEmpty) out.add(PostMediaItem(url: url, isVideo: false));
-      }
-      if (out.isNotEmpty) return out;
+    // 🔹 THEN fallback to parsed media
+    final parsed = MediaModel.parsePostMedia(data);
+
+    final validParsed = parsed.where((m) {
+      final u = m.isVideo ? (m.videoUrl ?? '') : m.image.forFeed();
+      return u.trim().isNotEmpty;
+    }).toList();
+
+    if (validParsed.isNotEmpty) {
+      return validParsed.map((m) {
+        final isVideo = m.isVideo;
+
+        final imageUrl = m.image.forFeed().isNotEmpty
+            ? m.image.forFeed()
+            : (m.image.thumb.isNotEmpty
+            ? m.image.thumb
+            : (m.image.medium.isNotEmpty
+            ? m.image.medium
+            : (m.image.full.isNotEmpty ? m.image.full : '')));
+
+        return PostMediaItem(
+          url: isVideo ? (m.videoUrl ?? '') : imageUrl,
+          isVideo: isVideo,
+          thumb: m.image.thumb,
+          medium: m.image.medium,
+          full: m.image.full,
+          videoUrl: m.videoUrl ?? '',
+          thumbnail: m.thumbnail ?? '',
+          trimStartMs: m.trimStartMs,
+          trimEndMs: m.trimEndMs,
+        );
+      }).toList(growable: false);
     }
 
-    final videoUrl = (data['videoUrl'] ?? data['mediaUrl'] ?? '').toString().trim();
-    if (videoUrl.isNotEmpty) out.add(PostMediaItem(url: videoUrl, isVideo: true));
+    // 🔹 media[] fallback
+    if (data['media'] is List && (data['media'] as List).isNotEmpty) {
+      final list = data['media'] as List;
 
-    return out;
+      return list.map((item) {
+        final map = item as Map<String, dynamic>;
+
+        final type = (map['type'] ?? 'image').toString();
+        final url = (map['url'] ?? '').toString();
+        final thumb = (map['thumbnail'] ?? '').toString();
+
+        return PostMediaItem(
+          url: url,
+          isVideo: type == 'video',
+          thumb: thumb.isNotEmpty ? thumb : url,
+          medium: url,
+          full: url,
+          videoUrl: type == 'video' ? url : '',
+          thumbnail: thumb,
+        );
+      }).toList(growable: false);
+    }
+
+    // 🔹 legacy fallback
+    final legacyUrl = (data['imageUrl'] ??
+        data['photoUrl'] ??
+        data['mediaUrl'] ??
+        data['thumbnailUrl'] ??
+        '')
+        .toString();
+
+    if (legacyUrl.isNotEmpty) {
+      return [
+        PostMediaItem(
+          url: legacyUrl,
+          isVideo: false,
+          thumb: legacyUrl,
+          medium: legacyUrl,
+          full: legacyUrl,
+        )
+      ];
+    }
+
+    // ❌ FINAL fallback
+    return [];
   }
 }
 
@@ -167,13 +303,6 @@ int _asInt(dynamic value) {
   if (value is int) return value;
   if (value is num) return value.toInt();
   return int.tryParse(value?.toString() ?? '') ?? 0;
-}
-
-int? _asIntNullable(dynamic value) {
-  if (value == null) return null;
-  if (value is int) return value;
-  if (value is num) return value.toInt();
-  return int.tryParse(value.toString());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -265,58 +394,159 @@ class _ExplorePageState extends State<ExplorePage> {
   bool                    _isFetching     = false;
   bool                    _hasMore        = true;
   bool                    _didAutoOpenReels = false;
+  bool                    _hasMoreUndated = true;
   final ScrollController  _scrollCtrl     = ScrollController();
-  final ExploreService    _exploreService = ExploreService();
+  DocumentSnapshot?      _undatedLastDoc;
   final TextEditingController _searchCtrl = TextEditingController();
 
   _ExploreFilter _filter      = _ExploreFilter.forYou;
   String         _searchQuery = '';
   List<String>   _trendingTags = [];
 
+  // Cached saved posts to avoid a StreamBuilder per tile/action (production
+  // performance critical).
+  final ValueNotifier<Map<String, dynamic>> _savedPostsNotifier =
+      ValueNotifier<Map<String, dynamic>>(const <String, dynamic>{});
+  StreamSubscription<Map<String, dynamic>>? _savedPostsSub;
+
   @override
   void initState() {
     super.initState();
     if (widget.openReelsOnStart) _filter = _ExploreFilter.videos;
+    _initSavedPostsListener();
     _fetchNextPage();
     _scrollCtrl.addListener(_onScroll);
+  }
+
+  void _initSavedPostsListener() {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isEmpty) return;
+    _savedPostsSub = SaveService().savedPostsStream(uid).listen((savedMap) {
+      _savedPostsNotifier.value = savedMap;
+    });
+  }
+
+  List<PostModel> _filteredPostsCache = const [];
+
+  void _rebuildFilteredPostsCache() {
+    var list = _posts;
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      list = list.where((p) =>
+          p.captionLower.contains(q) ||
+          p.locationLower.contains(q) ||
+          p.tagsLower.any((t) => t.contains(q))).toList();
+    } else {
+      list = list.toList(growable: false);
+    }
+
+    switch (_filter) {
+      case _ExploreFilter.forYou:
+        break;
+      case _ExploreFilter.photos:
+        list = list.where((p) => !p.isVideo && p.hasMedia).toList();
+        break;
+      case _ExploreFilter.videos:
+        list = list.where((p) => p.isVideo).toList();
+        break;
+      case _ExploreFilter.trending:
+        list = list.where((p) => p.tags.isNotEmpty).toList()
+          ..sort((a, b) => (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
+        break;
+    }
+
+    _filteredPostsCache = list;
   }
 
   @override
   void dispose() {
     _scrollCtrl.dispose();
     _searchCtrl.dispose();
+    _savedPostsSub?.cancel();
+    _savedPostsNotifier.dispose();
     super.dispose();
   }
 
   void _onScroll() {
     if (_scrollCtrl.position.pixels >= _scrollCtrl.position.maxScrollExtent - 400 &&
-        !_isFetching && _hasMore) {
+        !_isFetching && (_hasMore || _hasMoreUndated)) {
       _fetchNextPage();
     }
   }
 
   Future<void> _fetchNextPage() async {
-    if (_isFetching || !_hasMore) return;
+    if (_isFetching || (!_hasMore && !_hasMoreUndated)) return;
     _isFetching = true;
     if (mounted) setState(() {});
 
     try {
-      Query<Map<String, dynamic>> query = FirebaseFirestore.instance
-          .collection('posts')
-          .orderBy('createdAt', descending: true)
-          .limit(_kPageSize);
-      if (_lastDoc != null) query = query.startAfterDocument(_lastDoc!);
+      final existingIds = _posts.map((p) => p.id).toSet();
+      var addedCount = 0;
 
-      final snap = await query.get();
-      if (snap.docs.isEmpty || snap.docs.length < _kPageSize) _hasMore = false;
+      // 1) Main page query (depends on createdAt ordering)
+      if (_hasMore) {
+        Query<Map<String, dynamic>> datedQuery = FirebaseFirestore.instance
+            .collection('posts')
+            .orderBy('createdAt', descending: true)
+            .limit(_kPageSize);
+        if (_lastDoc != null) {
+          datedQuery = datedQuery.startAfterDocument(_lastDoc!);
+        }
 
-      if (snap.docs.isNotEmpty) {
-        _lastDoc = snap.docs.last;
-        final newPosts = snap.docs.map(PostModel.fromFirestore).toList();
-        _posts.addAll(newPosts);
-        _recomputeTrending();
-        _tryAutoOpenReels();
+        final snap = await datedQuery.get();
+
+        if (snap.docs.isEmpty || snap.docs.length < _kPageSize) {
+          _hasMore = false;
+        }
+
+        if (snap.docs.isNotEmpty) {
+          _lastDoc = snap.docs.last;
+          final newPosts = snap.docs.map(PostModel.fromFirestore).toList();
+          for (final p in newPosts) {
+            if (existingIds.contains(p.id)) continue;
+            existingIds.add(p.id);
+            _posts.add(p);
+            addedCount++;
+          }
+        }
       }
+
+      // 2) Fetch "createdAt is null" posts safely, with their own pagination.
+      // This prevents missing tiles when scrolling past the first page.
+      final remaining = _kPageSize - addedCount;
+      if (_hasMoreUndated && remaining > 0) {
+        Query<Map<String, dynamic>> undatedQuery = FirebaseFirestore.instance
+            .collection('posts')
+            .where('createdAt', isNull: true)
+            .orderBy(FieldPath.documentId)
+            .limit(remaining);
+
+        if (_undatedLastDoc != null) {
+          undatedQuery = undatedQuery.startAfterDocument(_undatedLastDoc!);
+        }
+
+        final undatedSnap = await undatedQuery.get();
+        final undatedDocs = undatedSnap.docs;
+        if (undatedDocs.isEmpty || undatedDocs.length < remaining) {
+          _hasMoreUndated = false;
+        }
+
+        if (undatedDocs.isNotEmpty) {
+          _undatedLastDoc = undatedDocs.last;
+          final undatedPosts =
+              undatedDocs.map(PostModel.fromFirestore).toList();
+          for (final p in undatedPosts) {
+            if (existingIds.contains(p.id)) continue;
+            existingIds.add(p.id);
+            _posts.add(p);
+            addedCount++;
+          }
+        }
+      }
+
+      _recomputeTrending();
+      _rebuildFilteredPostsCache();
+      _tryAutoOpenReels();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -364,36 +594,23 @@ class _ExplorePageState extends State<ExplorePage> {
       _hasMore    = true;
       _isFetching = false;
       _trendingTags = [];
+      _hasMoreUndated = true;
+      _undatedLastDoc = null;
+      _filteredPostsCache = const [];
     });
     _UserProfileCache().clear();
     await _fetchNextPage();
   }
 
-  List<PostModel> get _filteredPosts {
-    List<PostModel> list = _posts;
-    final q = _searchQuery.trim().toLowerCase();
-    if (q.isNotEmpty) {
-      list = list.where((p) =>
-      p.caption.toLowerCase().contains(q) ||
-          p.tags.any((t) => t.toLowerCase().contains(q)) ||
-          p.location.toLowerCase().contains(q),
-      ).toList();
-    }
-    switch (_filter) {
-      case _ExploreFilter.forYou:   break;
-      case _ExploreFilter.photos:   list = list.where((p) => !p.isVideo && p.hasMedia).toList(); break;
-      case _ExploreFilter.videos:   list = list.where((p) => p.isVideo).toList(); break;
-      case _ExploreFilter.trending:
-        list = list.where((p) => p.tags.isNotEmpty).toList()
-          ..sort((a, b) => (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
-        break;
-    }
-    return list;
-  }
+  // _filteredPostsCache is computed on state changes.
 
   void _openReels(List<PostModel> videoPosts, int startIdx) {
     Navigator.push(context, MaterialPageRoute(
-      builder: (_) => _ExploreReelsViewer(videoPosts: videoPosts, initialIndex: startIdx),
+      builder: (_) => _ExploreReelsViewer(
+        videoPosts: videoPosts,
+        initialIndex: startIdx,
+        savedPostsListenable: _savedPostsNotifier,
+      ),
     ));
   }
 
@@ -404,6 +621,7 @@ class _ExplorePageState extends State<ExplorePage> {
         builder: (_) => _PostDetailPage(
           post: post,
           currentUserId: FirebaseAuth.instance.currentUser?.uid,
+          savedPostsListenable: _savedPostsNotifier,
         ),
       ),
     );
@@ -487,7 +705,10 @@ class _ExplorePageState extends State<ExplorePage> {
           ),
           child: TextField(
             controller: _searchCtrl,
-            onChanged: (v) => setState(() => _searchQuery = v),
+            onChanged: (v) => setState(() {
+              _searchQuery = v;
+              _rebuildFilteredPostsCache();
+            }),
             textInputAction: TextInputAction.search,
             style: GoogleFonts.poppins(fontSize: 14, color: Colors.black87),
             decoration: InputDecoration(
@@ -497,7 +718,11 @@ class _ExplorePageState extends State<ExplorePage> {
               suffixIcon: _searchQuery.isNotEmpty
                   ? IconButton(
                 icon: const Icon(Icons.close_rounded, size: 18, color: Colors.grey),
-                onPressed: () => setState(() { _searchCtrl.clear(); _searchQuery = ''; }),
+                onPressed: () => setState(() {
+                  _searchCtrl.clear();
+                  _searchQuery = '';
+                  _rebuildFilteredPostsCache();
+                }),
               )
                   : null,
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
@@ -518,7 +743,10 @@ class _ExplorePageState extends State<ExplorePage> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           children: _ExploreFilter.values.map((f) => _FilterChip(
             filter: f, selected: _filter == f,
-            onTap: () => setState(() => _filter = f),
+            onTap: () => setState(() {
+              _filter = f;
+              _rebuildFilteredPostsCache();
+            }),
           )).toList(),
         ),
       ),
@@ -548,7 +776,11 @@ class _ExplorePageState extends State<ExplorePage> {
           itemBuilder: (_, i) {
             final tag = _trendingTags[i];
             return GestureDetector(
-              onTap: () => setState(() { _searchCtrl.text = tag; _searchQuery = tag; }),
+              onTap: () => setState(() {
+                _searchCtrl.text = tag;
+                _searchQuery = tag;
+                _rebuildFilteredPostsCache();
+              }),
               child: Container(
                 margin: const EdgeInsets.only(right: 8),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -570,7 +802,7 @@ class _ExplorePageState extends State<ExplorePage> {
 
   // [V3] Clean 3-column grid — no custom delegate (eliminates offset bugs)
   Widget _buildGrid() {
-    final posts = _filteredPosts;
+    final posts = _filteredPostsCache;
 
     if (posts.isEmpty && !_isFetching) {
       return SliverFillRemaining(
@@ -724,78 +956,86 @@ class _ExploreGridTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    final decode = (MediaQuery.of(context).size.width / 3 * dpr).round();
     final imageUrl = post.firstImageUrl;
-    final videoThumbUrl = post.thumbnailUrl;
+    final videoThumbUrl = post.thumbnailUrl.isNotEmpty
+        ? post.thumbnailUrl
+        : (post.firstVideoItem?.thumbnail.isNotEmpty == true
+        ? post.firstVideoItem!.thumbnail
+        : post.firstVideoItem?.forGrid() ?? '');
 
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (post.isVideo && videoThumbUrl.isNotEmpty)
-            CachedNetworkImage(
-              imageUrl: videoThumbUrl,
-              fit: BoxFit.cover,
-              memCacheWidth: 300,
-              memCacheHeight: 300,
-              maxWidthDiskCache: 300,
-              placeholder: (_, __) => const SizedBox(),
-              errorWidget: (_, __, ___) => Container(
-                color: Colors.black,
+      child: RepaintBoundary(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+
+            // 🎥 VIDEO POST
+            if (post.isVideo && videoThumbUrl.isNotEmpty)
+              CachedNetworkImage(
+                imageUrl: videoThumbUrl,
+                cacheManager: AppCacheManager.media,
+                fit: BoxFit.cover,
+                memCacheWidth: decode,
+                memCacheHeight: decode,
+                maxWidthDiskCache: decode,
+                placeholder: (_, __) => const SizedBox(),
+                errorWidget: (_, __, ___) => Container(
+                  color: Colors.black,
+                  child: const Center(
+                    child: Icon(Icons.play_circle_fill, color: Colors.white, size: 30),
+                  ),
+                ),
+              )
+
+            else if (post.isVideo)
+              Container(
+                color: Color(0xFF2D1B69),
                 child: const Center(
                   child: Icon(Icons.play_circle_fill, color: Colors.white, size: 30),
                 ),
-              ),
-            )
-          else if (post.isVideo)
-            Container(
-              color: Colors.black,
-              child: const Center(
-                child: Icon(Icons.play_circle_fill, color: Colors.white, size: 30),
-              ),
-            )
-
-          // 🖼️ Image post
-          else
-            if (imageUrl.isNotEmpty)
-              CachedNetworkImage(
-                imageUrl: imageUrl,
-                fit: BoxFit.cover,
-                memCacheWidth: 300,
-                memCacheHeight: 300,
-                maxWidthDiskCache: 300,
-                placeholder: (_, __) => const SizedBox(),
-                errorWidget: (_, __, ___) =>
-                    Container(
-                      color: Colors.grey.shade200,
-                      child: const Icon(
-                          Icons.image_not_supported, color: Colors.grey),
-                    ),
               )
 
-            // ⚠️ fallback
-            else
-              Container(color: Colors.grey.shade200),
+            // 🖼️ IMAGE POST (FIXED)
+            else if (post.hasMedia && imageUrl.isNotEmpty)
+                CachedNetworkImage(
+                  imageUrl: imageUrl,
+                  cacheManager: AppCacheManager.media,
+                  fit: BoxFit.cover,
+                  memCacheWidth: decode,
+                  memCacheHeight: decode,
+                  maxWidthDiskCache: decode,
+                  placeholder: (_, __) => const SizedBox(),
+                  errorWidget: (_, __, ___) => Container(
+                    color: Colors.grey.shade200,
+                    child: const Icon(Icons.image_not_supported, color: Colors.grey),
+                  ),
+                )
 
-          // 🎥 Video badge
-          if (post.isVideo)
-            Positioned(
-              top: 6,
-              right: 6,
-              child: Container(
-                padding: const EdgeInsets.all(3),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(4),
+              else
+                Container(color: Colors.grey.shade200),
+
+            // 🎥 Video badge
+            if (post.isVideo)
+              Positioned(
+                top: 6,
+                right: 6,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Icon(Icons.videocam_rounded,
+                      color: Colors.white, size: 14),
                 ),
-                child: const Icon(Icons.videocam_rounded,
-                    color: Colors.white, size: 14),
-              ),
-            )
+              )
 
-          // 🖼️ Multi-image badge
-          else
-            if (post.mediaItems.length > 1)
+            // 🖼️ Multi-image badge
+            else if (post.mediaItems.length > 1)
               Positioned(
                 top: 6,
                 right: 6,
@@ -810,38 +1050,38 @@ class _ExploreGridTile extends StatelessWidget {
                 ),
               ),
 
-          // 🏷️ Hero caption
-          if (isHero)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.transparent,
-                      Colors.black.withOpacity(0.6),
-                    ],
+            // 🏷️ Hero caption
+            if (isHero)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withOpacity(0.6),
+                      ],
+                    ),
                   ),
-                ),
-                child: Text(
-                  post.caption,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.poppins(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
+                  child: Text(
+                    post.caption,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.poppins(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -853,8 +1093,13 @@ class _ExploreGridTile extends StatelessWidget {
 class _PostDetailPage extends StatelessWidget {
   final PostModel post;
   final String? currentUserId;
+  final ValueListenable<Map<String, dynamic>> savedPostsListenable;
 
-  const _PostDetailPage({required this.post, required this.currentUserId});
+  const _PostDetailPage({
+    required this.post,
+    required this.currentUserId,
+    required this.savedPostsListenable,
+  });
 
   Future<void> _toggleLike(BuildContext context) async {
     final uid = currentUserId;
@@ -927,6 +1172,7 @@ class _PostDetailPage extends StatelessWidget {
             onLike: () => _toggleLike(context),
             onComment: () => _openComments(context),
             onShare: _share,
+            savedPostsListenable: savedPostsListenable,
           ),
 
           if (post.caption.isNotEmpty)
@@ -988,14 +1234,21 @@ class _MediaCarouselState extends State<_MediaCarousel> {
 
             itemBuilder: (_, i) {
               final m = widget.mediaItems[i];
+              final mq = MediaQuery.of(context);
+              final isLargeDevice = mq.size.width >= 900;
+              final imageUrl = m.forFullscreenByDevice(isLargeDevice);
+              final decodeWidth = (mq.size.width * mq.devicePixelRatio).round();
+              final decodeHeight = (380 * mq.devicePixelRatio).round();
+              final thumbUrl = m.forGrid();
+              final fallbackUrl = imageUrl.replaceAll('.webp', '.jpg');
 
               return GestureDetector(
                 onDoubleTap: widget.onDoubleTap,
 
                 child: m.isVideo
                     ? _VideoCell(
-                  key: ValueKey('media_${m.url}'),
-                  url: m.url,
+                  key: ValueKey('media_${m.forFeed()}'),
+                  url: m.forFeed(),
                   trimStartMs: m.trimStartMs,
                   trimEndMs: m.trimEndMs,
                   fit: BoxFit.cover,
@@ -1003,19 +1256,38 @@ class _MediaCarouselState extends State<_MediaCarousel> {
                   // 🔥 FIX: only current video should autoplay
                   autoPlay: i == _page,
 
-                  visibilityKey: 'media_${m.url.hashCode}_$i',
+                  visibilityKey: 'media_${m.forFeed().hashCode}_$i',
                 )
 
                     : CachedNetworkImage(
-                  imageUrl: m.url,
+                  imageUrl: imageUrl,
+                  cacheManager: AppCacheManager.media,
                   fit: BoxFit.cover,
                   width: double.infinity,
-                  memCacheWidth: 300,
-                  memCacheHeight: 300,
-                  maxWidthDiskCache: 300,
-                  placeholder: (_, __) => const SizedBox(),
+                  memCacheWidth: decodeWidth,
+                  memCacheHeight: decodeHeight,
+                  maxWidthDiskCache: decodeWidth,
+                  fadeInDuration: const Duration(milliseconds: 140),
+                  placeholder: (_, __) => thumbUrl.isNotEmpty
+                      ? CachedNetworkImage(
+                          imageUrl: thumbUrl,
+                          cacheManager: AppCacheManager.media,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          memCacheWidth: decodeWidth,
+                          memCacheHeight: decodeHeight,
+                          placeholder: (_, __) => const SizedBox(),
+                          errorWidget: (_, __, ___) => const SizedBox(),
+                        )
+                      : const SizedBox(),
                   errorWidget: (_, __, ___) =>
-                  const Center(child: Icon(Icons.broken_image)),
+                  (fallbackUrl != imageUrl)
+                      ? Image.network(
+                          fallbackUrl,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                        )
+                      : const Center(child: Icon(Icons.broken_image)),
                 ),
               );
             },
@@ -1053,7 +1325,7 @@ class _MediaCarouselState extends State<_MediaCarousel> {
 // POST ACTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _PostActions extends StatelessWidget {
+class _PostActions extends StatefulWidget {
   final String postId;
   final String? currentUserId;
   final int likeCount;
@@ -1061,63 +1333,111 @@ class _PostActions extends StatelessWidget {
   final VoidCallback onLike;
   final VoidCallback onComment;
   final VoidCallback onShare;
+  final ValueListenable<Map<String, dynamic>> savedPostsListenable;
 
   const _PostActions({
     required this.postId, required this.currentUserId,
     required this.likeCount, required this.commentCount,
     required this.onLike, required this.onComment, required this.onShare,
+    required this.savedPostsListenable,
   });
 
   @override
+  State<_PostActions> createState() => _PostActionsState();
+}
+
+class _PostActionsState extends State<_PostActions> {
+  bool _isLiked = false;
+  late int _localLikeCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _localLikeCount = widget.likeCount;
+  }
+
+  void _handleLike() {
+    final uid = widget.currentUserId;
+    if (uid == null) {
+      widget.onLike();
+      return;
+    }
+    final nextLiked = !_isLiked;
+    setState(() {
+      _isLiked = nextLiked;
+      _localLikeCount = (_localLikeCount + (nextLiked ? 1 : -1)).clamp(0, 1 << 60);
+    });
+    widget.onLike();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: currentUserId == null
-          ? null
-          : FirebaseFirestore.instance
-              .collection('posts')
-              .doc(postId)
-              .collection('likes')
-              .doc(currentUserId)
-              .snapshots(),
-      builder: (context, likeSnap) {
-        final isLiked = likeSnap.data?.exists ?? false;
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            IconButton(
-              onPressed: onLike,
-              icon: Icon(
-                  isLiked ? Icons.favorite : Icons.favorite_border,
-                  color: isLiked ? _kLikeRed : Colors.black87, size: 28),
-            ),
-            IconButton(onPressed: onComment,
-                icon: const Icon(Icons.chat_bubble_outline, size: 26, color: Colors.black87)),
-            IconButton(onPressed: onShare,
-                icon: const Icon(Icons.send_outlined, size: 26, color: Colors.black87)),
-            const Spacer(),
-            SaveButton(postId: postId, currentUserId: currentUserId, iconSize: 26, color: Colors.black87),
-          ]),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 4),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(
-                likeCount == 0 ? 'Be the first to like this'
-                    : isLiked && likeCount == 1 ? 'Liked by you'
-                    : isLiked ? 'Liked by you and ${likeCount - 1} others'
-                    : '$likeCount likes',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13,
-                    color: const Color(0xFF262626)),
-              ),
-              if (commentCount > 0)
-                GestureDetector(
-                  onTap: onComment,
-                  child: Text('View all $commentCount comments',
-                      style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade500)),
-                ),
-            ]),
+    final likeCount = _localLikeCount;
+    final isLiked = _isLiked;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        IconButton(
+          onPressed: _handleLike,
+          icon: Icon(
+            isLiked ? Icons.favorite : Icons.favorite_border,
+            color: isLiked ? _kLikeRed : Colors.black87,
+            size: 28,
           ),
-        ]);
-      },
-    );
+        ),
+        IconButton(
+          onPressed: widget.onComment,
+          icon: const Icon(Icons.chat_bubble_outline, size: 26, color: Colors.black87),
+        ),
+        IconButton(
+          onPressed: widget.onShare,
+          icon: const Icon(Icons.send_outlined, size: 26, color: Colors.black87),
+        ),
+        const Spacer(),
+        ValueListenableBuilder<Map<String, dynamic>>(
+          valueListenable: widget.savedPostsListenable,
+          builder: (_, savedMap, __) {
+            return SaveButton(
+              postId: widget.postId,
+              currentUserId: widget.currentUserId,
+              savedPostsMap: savedMap,
+              iconSize: 26,
+              color: Colors.black87,
+            );
+          },
+        ),
+      ]),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 4),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(
+            likeCount == 0
+                ? 'Be the first to like this'
+                : isLiked && likeCount == 1
+                    ? 'Liked by you'
+                    : isLiked
+                        ? 'Liked by you and ${likeCount - 1} others'
+                        : '$likeCount likes',
+            style: GoogleFonts.poppins(
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+              color: const Color(0xFF262626),
+            ),
+          ),
+          if (widget.commentCount > 0)
+            GestureDetector(
+              onTap: widget.onComment,
+              child: Text(
+                'View all ${widget.commentCount} comments',
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  color: Colors.grey.shade500,
+                ),
+              ),
+            ),
+        ]),
+      ),
+    ]);
   }
 }
 
@@ -1196,6 +1516,8 @@ class _CommentsSheet extends StatefulWidget {
 class _CommentsSheetState extends State<_CommentsSheet> {
   final TextEditingController _input = TextEditingController();
   final String? _currentUserId = FirebaseAuth.instance.currentUser?.uid;
+  final GlobalKey<_CommentsListState> _commentsKey =
+      GlobalKey<_CommentsListState>();
 
   @override
   void dispose() { _input.dispose(); super.dispose(); }
@@ -1217,6 +1539,8 @@ class _CommentsSheetState extends State<_CommentsSheet> {
         tx.update(postRef, {'commentCount': FieldValue.increment(1)});
       });
       _input.clear();
+      // Reload comments once (no realtime listener) so new comment appears.
+      await _commentsKey.currentState?.refresh();
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1237,7 +1561,7 @@ class _CommentsSheetState extends State<_CommentsSheet> {
           const SizedBox(height: 10),
           Text('Comments', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 16)),
           const Divider(),
-          Expanded(child: _CommentsList(postId: widget.postId)),
+          Expanded(child: _CommentsList(key: _commentsKey, postId: widget.postId)),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
             child: Row(children: [
@@ -1273,24 +1597,95 @@ class _CommentsSheetState extends State<_CommentsSheet> {
   }
 }
 
-class _CommentsList extends StatelessWidget {
+class _CommentsList extends StatefulWidget {
   final String postId;
-  const _CommentsList({required this.postId});
+  const _CommentsList({super.key, required this.postId});
+
+  @override
+  State<_CommentsList> createState() => _CommentsListState();
+}
+
+class _CommentsListState extends State<_CommentsList> {
+  static const int _kCommentPageSize = 20;
+
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> _docs = [];
+  QueryDocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+
+  bool _isLoading = false;
+  bool _hasMore = true;
+
+  Future<void> refresh() async {
+    _docs.clear();
+    _lastDoc = null;
+    _hasMore = true;
+    await _loadMore(initial: true);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMore(initial: true);
+  }
+
+  Future<void> _loadMore({required bool initial}) async {
+    if (!mounted) return;
+    if (_isLoading) return;
+    if (!_hasMore && !initial) return;
+
+    setState(() => _isLoading = true);
+    try {
+      Query<Map<String, dynamic>> q = FirebaseFirestore.instance
+          .collection('posts')
+          .doc(widget.postId)
+          .collection('comments')
+          .orderBy('createdAt')
+          .limit(_kCommentPageSize);
+
+      if (_lastDoc != null) q = q.startAfterDocument(_lastDoc!);
+
+      final snap = await q.get();
+
+      final newDocs = snap.docs;
+      if (newDocs.isEmpty) {
+        _hasMore = false;
+        return;
+      }
+
+      _lastDoc = newDocs.last;
+      _docs.addAll(newDocs);
+    } catch (_) {
+      // Keep showing already loaded comments.
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('posts').doc(postId).collection('comments')
-          .orderBy('createdAt').snapshots(),
-      builder: (context, snapshot) {
-        final docs = snapshot.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return Center(child: Text('No comments yet',
-              style: GoogleFonts.poppins(color: Colors.grey.shade500)));
+    if (_docs.isEmpty && _isLoading) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+
+    if (_docs.isEmpty) {
+      return Center(
+        child: Text(
+          'No comments yet',
+          style: GoogleFonts.poppins(color: Colors.grey.shade500),
+        ),
+      );
+    }
+
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        final metrics = n.metrics;
+        final nearBottom =
+            metrics.pixels >= metrics.maxScrollExtent - 220;
+        if (nearBottom && !_isLoading && _hasMore) {
+          _loadMore(initial: false);
         }
-        return _CommentsFetcher(docs: docs);
+        return false;
       },
+      child: _CommentsFetcher(docs: List.of(_docs)),
     );
   }
 }
@@ -1316,7 +1711,12 @@ class _CommentsFetcherState extends State<_CommentsFetcher> {
   Future<void> _fetchProfiles() async {
     final ids = widget.docs.map((d) => (d.data()['userId'] ?? '').toString())
         .where((id) => id.isNotEmpty).toSet();
-    await Future.wait(ids.map((id) async {
+    final missing = ids.where((id) => !_profiles.containsKey(id)).toList();
+    if (missing.isEmpty) {
+      if (mounted) setState(() => _loaded = true);
+      return;
+    }
+    await Future.wait(missing.map((id) async {
       _profiles[id] = await _UserProfileCache().get(id);
     }));
     if (mounted) setState(() => _loaded = true);
@@ -1383,8 +1783,13 @@ class _CommentsFetcherState extends State<_CommentsFetcher> {
 class _ExploreReelsViewer extends StatefulWidget {
   final List<PostModel> videoPosts;
   final int initialIndex;
+  final ValueListenable<Map<String, dynamic>> savedPostsListenable;
 
-  const _ExploreReelsViewer({required this.videoPosts, required this.initialIndex});
+  const _ExploreReelsViewer({
+    required this.videoPosts,
+    required this.initialIndex,
+    required this.savedPostsListenable,
+  });
 
   @override
   State<_ExploreReelsViewer> createState() => _ExploreReelsViewerState();
@@ -1394,7 +1799,6 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
   late final PageController _controller;
   int  _currentIndex = 0;
   bool _globalMuted  = false;
-  VideoPlayerController? _preloadCtrl;
 
   @override
   void initState() {
@@ -1402,27 +1806,12 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
     _currentIndex = widget.initialIndex;
     // [V9] initialPage must match _currentIndex
     _controller = PageController(initialPage: widget.initialIndex);
-    _preloadNext(widget.initialIndex);
   }
 
   @override
   void dispose() {
-    _preloadCtrl?.dispose();
     _controller.dispose();
     super.dispose();
-  }
-
-  void _preloadNext(int index) {
-    final nextIndex = index + 1;
-    if (nextIndex >= widget.videoPosts.length) return;
-    final nextUrl = widget.videoPosts[nextIndex].firstVideoUrl;
-    if (nextUrl.isEmpty) return;
-    _preloadCtrl?.dispose();
-    final ctrl = VideoPlayerController.networkUrl(Uri.parse(nextUrl));
-    _preloadCtrl = ctrl;
-    ctrl
-      ..setLooping(true)
-      ..initialize().catchError((_) {});
   }
 
   @override
@@ -1453,15 +1842,17 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
         itemCount: widget.videoPosts.length,
         onPageChanged: (i) {
           setState(() => _currentIndex = i);
-          _preloadNext(i);
         },
         itemBuilder: (_, index) {
           final post = widget.videoPosts[index];
+          final warmUp = (index - _currentIndex).abs() <= 1;
           return _ReelItem(
             key: ValueKey(post.id),
             post: post,
             // [V7] isCurrent correctly passed to each item
             isCurrent: index == _currentIndex,
+            warmUp: warmUp,
+            savedPostsListenable: widget.savedPostsListenable,
             muted: _globalMuted,
             onMuteToggle: () => setState(() => _globalMuted = !_globalMuted),
             onBack: () => Navigator.pop(context),
@@ -1480,6 +1871,8 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
 class _ReelItem extends StatefulWidget {
   final PostModel post;
   final bool isCurrent;
+  final bool warmUp;
+  final ValueListenable<Map<String, dynamic>> savedPostsListenable;
   final bool muted;
   final VoidCallback onMuteToggle;
   final VoidCallback onBack;
@@ -1489,6 +1882,8 @@ class _ReelItem extends StatefulWidget {
     Key? key,
     required this.post,
     required this.isCurrent,
+    required this.warmUp,
+    required this.savedPostsListenable,
     required this.muted,
     required this.onMuteToggle,
     required this.onBack,
@@ -1549,22 +1944,34 @@ class _ReelItemState extends State<_ReelItem> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // [V4][V5] Full-screen video with correct ratio
-        GestureDetector(
-          onDoubleTap: _onDoubleTap,
-          child: _VideoCell(
-            key: ValueKey('reel_${post.id}'),
-            url: post.firstVideoUrl,
-            trimStartMs: firstVideo?.trimStartMs,
-            trimEndMs: firstVideo?.trimEndMs,
+        // Non-current reels show a cheap thumbnail; no video initialization.
+        if (!widget.isCurrent && post.thumbnailUrl.isNotEmpty)
+          CachedNetworkImage(
+            imageUrl: post.thumbnailUrl,
             fit: BoxFit.cover,
-            // [V7] autoPlay is driven by isCurrent
-            autoPlay: widget.isCurrent,
-            muted: widget.muted,
-            visibilityKey: 'reel_${post.id}',
-            showProgressBar: true,
+            memCacheWidth: 300,
+            memCacheHeight: 300,
+            placeholder: (_, __) => const ColoredBox(color: Colors.black),
+            errorWidget: (_, __, ___) => const ColoredBox(color: Colors.black),
           ),
-        ),
+        // [V4][V5] Full-screen video (only for current tile)
+        if (widget.isCurrent)
+          GestureDetector(
+            onDoubleTap: _onDoubleTap,
+            child: _VideoCell(
+              key: ValueKey('reel_${post.id}'),
+              url: post.firstVideoUrl,
+              trimStartMs: firstVideo?.trimStartMs,
+              trimEndMs: firstVideo?.trimEndMs,
+              fit: BoxFit.cover,
+              // [V7] autoPlay is driven by isCurrent
+              autoPlay: widget.isCurrent,
+              warmUp: widget.warmUp,
+              muted: widget.muted,
+              visibilityKey: 'reel_${post.id}',
+              showProgressBar: true,
+            ),
+          ),
 
         // Double-tap heart
         if (_showHeart)
@@ -1627,11 +2034,14 @@ class _ReelItemState extends State<_ReelItem> {
           ),
         ),
 
-        // Author info — bottom left
-        Positioned(
-          left: 12, bottom: 100, right: 80,
-          child: _ReelAuthorInfo(userId: post.userId),
-        ),
+        // Author info — bottom left (only for current tile)
+        if (widget.isCurrent)
+          Positioned(
+            left: 12,
+            bottom: 100,
+            right: 80,
+            child: _ReelAuthorInfo(userId: post.userId),
+          ),
 
         // Caption
         if (post.caption.isNotEmpty)
@@ -1641,22 +2051,25 @@ class _ReelItemState extends State<_ReelItem> {
                 style: GoogleFonts.poppins(color: Colors.white, fontSize: 13, height: 1.4)),
           ),
 
-        // Right action bar
-        Positioned(
-          right: 10, bottom: 80,
-          child: _ReelActionBar(
-            postId: post.id,
-            currentUserId: widget.currentUserId,
-            likeCount: post.likeCount,
-            commentCount: post.commentCount,
-            onLike: _toggleLike,
-            onComment: _openComments,
-            onShare: () async {
-              final url = post.firstVideoUrl;
-              if (url.isNotEmpty) await Share.share(url);
-            },
+        // Right action bar (only for current tile)
+        if (widget.isCurrent)
+          Positioned(
+            right: 10,
+            bottom: 80,
+            child: _ReelActionBar(
+              postId: post.id,
+              currentUserId: widget.currentUserId,
+              likeCount: post.likeCount,
+              commentCount: post.commentCount,
+              onLike: _toggleLike,
+              onComment: _openComments,
+              onShare: () async {
+                final url = post.firstVideoUrl;
+                if (url.isNotEmpty) await Share.share(url);
+              },
+              savedPostsListenable: widget.savedPostsListenable,
+            ),
           ),
-        ),
       ],
     );
   }
@@ -1797,7 +2210,7 @@ class _ReelAuthorInfoState extends State<_ReelAuthorInfo> {
 // REEL ACTION BAR
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _ReelActionBar extends StatelessWidget {
+class _ReelActionBar extends StatefulWidget {
   final String postId;
   final String? currentUserId;
   final int likeCount;
@@ -1805,52 +2218,82 @@ class _ReelActionBar extends StatelessWidget {
   final VoidCallback onLike;
   final VoidCallback onComment;
   final VoidCallback onShare;
+  final ValueListenable<Map<String, dynamic>> savedPostsListenable;
 
   const _ReelActionBar({
     required this.postId, required this.currentUserId,
     required this.likeCount, required this.commentCount,
     required this.onLike, required this.onComment, required this.onShare,
+    required this.savedPostsListenable,
   });
 
   @override
+  State<_ReelActionBar> createState() => _ReelActionBarState();
+}
+
+class _ReelActionBarState extends State<_ReelActionBar> {
+  bool _isLiked = false;
+  late int _localLikeCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _localLikeCount = widget.likeCount;
+  }
+
+  void _handleLike() {
+    if (widget.currentUserId == null) {
+      widget.onLike();
+      return;
+    }
+    final next = !_isLiked;
+    setState(() {
+      _isLiked = next;
+      _localLikeCount = (_localLikeCount + (next ? 1 : -1)).clamp(0, 1 << 60);
+    });
+    widget.onLike();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: currentUserId == null
-          ? null
-          : FirebaseFirestore.instance
-              .collection('posts')
-              .doc(postId)
-              .collection('likes')
-              .doc(currentUserId)
-              .snapshots(),
-      builder: (_, likeSnap) {
-        final isLiked = likeSnap.data?.exists ?? false;
-        return Column(mainAxisSize: MainAxisSize.min, children: [
-          _ReelActionButton(
-            icon: isLiked ? Icons.favorite : Icons.favorite_border,
-            color: isLiked ? _kLikeRed : Colors.white,
-            label: likeCount > 0 ? '$likeCount' : '',
-            onTap: onLike,
-          ),
-          const SizedBox(height: 20),
-          _ReelActionButton(
-            icon: Icons.chat_bubble_outline_rounded,
+    final likeCount = _localLikeCount;
+    final isLiked = _isLiked;
+
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      _ReelActionButton(
+        icon: isLiked ? Icons.favorite : Icons.favorite_border,
+        color: isLiked ? _kLikeRed : Colors.white,
+        label: likeCount > 0 ? '$likeCount' : '',
+        onTap: _handleLike,
+      ),
+      const SizedBox(height: 20),
+      _ReelActionButton(
+        icon: Icons.chat_bubble_outline_rounded,
+        color: Colors.white,
+        label: widget.commentCount > 0 ? '${widget.commentCount}' : '',
+        onTap: widget.onComment,
+      ),
+      const SizedBox(height: 20),
+      _ReelActionButton(
+        icon: Icons.send_outlined,
+        color: Colors.white,
+        label: 'Share',
+        onTap: widget.onShare,
+      ),
+      const SizedBox(height: 20),
+      ValueListenableBuilder<Map<String, dynamic>>(
+        valueListenable: widget.savedPostsListenable,
+        builder: (_, savedMap, __) {
+          return SaveButton(
+            postId: widget.postId,
+            currentUserId: widget.currentUserId,
+            savedPostsMap: savedMap,
+            iconSize: 28,
             color: Colors.white,
-            label: commentCount > 0 ? '$commentCount' : '',
-            onTap: onComment,
-          ),
-          const SizedBox(height: 20),
-          _ReelActionButton(
-            icon: Icons.send_outlined,
-            color: Colors.white,
-            label: 'Share',
-            onTap: onShare,
-          ),
-          const SizedBox(height: 20),
-          SaveButton(postId: postId, currentUserId: currentUserId, iconSize: 28, color: Colors.white),
-        ]);
-      },
-    );
+          );
+        },
+      ),
+    ]);
   }
 }
 
@@ -1890,6 +2333,7 @@ class _VideoCell extends StatefulWidget {
   final int? trimEndMs;
   final BoxFit fit;
   final bool autoPlay;
+  final bool warmUp;
   final bool muted;
   final String? visibilityKey;
   final bool showProgressBar;
@@ -1901,6 +2345,7 @@ class _VideoCell extends StatefulWidget {
     this.trimEndMs,
     this.fit = BoxFit.cover,
     this.autoPlay = false,
+    this.warmUp = false,
     this.muted = false,
     this.visibilityKey,
     this.showProgressBar = false,
@@ -1917,11 +2362,12 @@ class _VideoCellState extends State<_VideoCell> {
   bool _initialized = false;
   Duration _effectiveTrimStart = Duration.zero;
   Duration? _effectiveTrimEnd;
+  Timer? _initDebounce;
+  bool _isVisible = false;
 
   @override
   void initState() {
     super.initState();
-    _initIfNeeded();
   }
 
   @override
@@ -1930,12 +2376,13 @@ class _VideoCellState extends State<_VideoCell> {
 
     // URL changed — dispose and re-init
     if (old.url != widget.url) {
+      _initDebounce?.cancel();
+      _initDebounce = null;
       _ctrl?.dispose();
       _ctrl = null;
       _ready = false;
       _error = false;
       _initialized = false;
-      _initIfNeeded();
       return;
     }
 
@@ -1969,6 +2416,17 @@ class _VideoCellState extends State<_VideoCell> {
           c.value.position < _effectiveTrimStart) {
         c.seekTo(_effectiveTrimStart);
       }
+    }
+
+    // If this cell just became current while already visible, init now.
+    if (widget.autoPlay && _isVisible && !_initialized) {
+      _initDebounce?.cancel();
+      _initDebounce = Timer(const Duration(milliseconds: 220), () {
+        if (!mounted) return;
+        if (!_isVisible || !widget.autoPlay) return;
+        _initIfNeeded();
+        if (_ready) _ctrl?.play();
+      });
     }
   }
 
@@ -2034,6 +2492,7 @@ class _VideoCellState extends State<_VideoCell> {
 
   @override
   void dispose() {
+    _initDebounce?.cancel();
     _ctrl?.removeListener(_enforceTrimWindow);
     _ctrl?.dispose();
     super.dispose();
@@ -2052,8 +2511,18 @@ class _VideoCellState extends State<_VideoCell> {
       content = Container(color: Colors.black,
           child: const Center(child: Icon(Icons.videocam_off, color: Colors.white54, size: 56)));
     } else if (!_ready || _ctrl == null || !_ctrl!.value.isInitialized) {
-      content = Container(color: Colors.black,
-          child: const Center(child: CircularProgressIndicator(color: Colors.white54, strokeWidth: 2)));
+      // For non-current tiles keep it cheap (no spinner), to avoid jank.
+      content = Container(
+        color: Colors.black,
+        child: widget.autoPlay
+            ? const Center(
+                child: CircularProgressIndicator(
+                  color: Colors.white54,
+                  strokeWidth: 2,
+                ),
+              )
+            : null,
+      );
     } else {
       final c = _ctrl!;
 
@@ -2109,18 +2578,34 @@ class _VideoCellState extends State<_VideoCell> {
       return VisibilityDetector(
         key: Key(widget.visibilityKey!),
         onVisibilityChanged: (info) {
-          if (info.visibleFraction > 0.1) {
-            _initIfNeeded();
-            if (widget.autoPlay && _ready) _ctrl?.play();
+          _isVisible = info.visibleFraction > 0.1;
+          if (_isVisible && widget.autoPlay) {
+            _initDebounce?.cancel();
+            _initDebounce = Timer(const Duration(milliseconds: 220), () {
+              if (!mounted) return;
+              // Initialize only if still current + visible after debounce.
+              if (!_isVisible || !widget.autoPlay) return;
+              _initIfNeeded();
+              if (_ready) _ctrl?.play();
+            });
           } else {
+            _initDebounce?.cancel();
+            _initDebounce = null;
             _ctrl?.pause();
+            // Dispose to keep active controllers minimal (max 2 across reels).
+            if (_initialized) {
+              _ctrl?.removeListener(_enforceTrimWindow);
+              _ctrl?.dispose();
+              _ctrl = null;
+              _ready = false;
+              _initialized = false;
+              _error = false;
+            }
           }
         },
         child: content,
       );
     }
-
-    _initIfNeeded();
     return content;
   }
 }

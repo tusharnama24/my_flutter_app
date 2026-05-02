@@ -1,5 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:halo/models/media_model.dart';
+import 'package:halo/services/app_cache_manager.dart';
 import 'package:video_player/video_player.dart';
 
 /// ================= CONTROLLER POOL =================
@@ -32,6 +37,14 @@ class VideoControllerPool {
     }
     _map.clear();
   }
+
+  void trimTo(Set<String> keepUrls) {
+    final remove = _map.keys.where((k) => !keepUrls.contains(k)).toList(growable: false);
+    for (final key in remove) {
+      _map[key]?.dispose();
+      _map.remove(key);
+    }
+  }
 }
 
 /// ================= USER CACHE =================
@@ -62,11 +75,13 @@ class ReelsFeed extends StatefulWidget {
 
 class _ReelsFeedState extends State<ReelsFeed> {
   final PageController _pageController = PageController();
-  final VideoControllerPool _pool = VideoControllerPool();
+  final VideoControllerPool _pool = VideoControllerPool(maxSize: 2);
 
   List<QueryDocumentSnapshot<Map<String, dynamic>>> reels = [];
   int currentIndex = 0;
+  int _lastIndex = 0;
   bool loading = true;
+  Timer? _videoPreloadDebounce;
 
   @override
   void initState() {
@@ -85,21 +100,11 @@ class _ReelsFeedState extends State<ReelsFeed> {
       reels = snap.docs;
       loading = false;
     });
-
-    _preload(0);
-  }
-
-  void _preload(int index) {
-    for (int i = index - 1; i <= index + 1; i++) {
-      if (i >= 0 && i < reels.length) {
-        final url = reels[i]['videoUrl'];
-        _pool.get(url);
-      }
-    }
   }
 
   @override
   void dispose() {
+    _videoPreloadDebounce?.cancel();
     _pool.disposeAll();
     _pageController.dispose();
     super.dispose();
@@ -122,21 +127,86 @@ class _ReelsFeedState extends State<ReelsFeed> {
         scrollDirection: Axis.vertical,
         itemCount: reels.length,
         onPageChanged: (i) {
+          final was = _lastIndex;
+          _lastIndex = i;
           setState(() => currentIndex = i);
-          _preload(i);
+          _videoPreloadDebounce?.cancel();
+          _videoPreloadDebounce = Timer(const Duration(milliseconds: 90), () {
+            _preloadNextVideo(directionDown: i >= was, from: i);
+          });
         },
         itemBuilder: (context, index) {
           final data = reels[index].data();
+          final media = MediaModel.parsePostMedia(data);
+          final firstVideo = media.firstWhere(
+            (m) => m.isVideo,
+            orElse: () => const MediaModel(
+              type: 'video',
+              image: MediaVariant(thumb: '', medium: '', full: ''),
+              videoUrl: '',
+              hlsUrl: '',
+              thumbnail: '',
+            ),
+          );
+          final videoUrl = firstVideo.preferredVideoUrl.isNotEmpty
+              ? firstVideo.preferredVideoUrl
+              : (data['videoUrl'] ?? '').toString();
+          final thumbnailUrl = firstVideo.thumbnail.isNotEmpty
+              ? firstVideo.thumbnail
+              : (data['thumbnailUrl'] ?? '').toString();
 
           return ReelItem(
             isActive: index == currentIndex,
             pool: _pool,
-            videoUrl: data['videoUrl'],
+            videoUrl: videoUrl,
+            thumbnailUrl: thumbnailUrl,
             caption: data['caption'] ?? '',
             userId: data['userId'] ?? '',
           );
         },
       ),
+    );
+  }
+
+  void _preloadNextVideo({required bool directionDown, required int from}) {
+    final next = directionDown ? from + 1 : from - 1;
+    if (next < 0 || next >= reels.length) return;
+    final data = reels[next].data();
+    final media = MediaModel.parsePostMedia(data);
+    final firstVideo = media.firstWhere(
+      (m) => m.isVideo,
+      orElse: () => const MediaModel(
+        type: 'video',
+        image: MediaVariant(thumb: '', medium: '', full: ''),
+        videoUrl: '',
+        hlsUrl: '',
+        thumbnail: '',
+      ),
+    );
+    final url = firstVideo.preferredVideoUrl.isNotEmpty
+        ? firstVideo.preferredVideoUrl
+        : (data['videoUrl'] ?? '').toString();
+    if (url.trim().isEmpty) return;
+    final currentData = reels[from].data();
+    final currentMedia = MediaModel.parsePostMedia(currentData);
+    final currentVideo = currentMedia.firstWhere(
+      (m) => m.isVideo,
+      orElse: () => const MediaModel(
+        type: 'video',
+        image: MediaVariant(thumb: '', medium: '', full: ''),
+        videoUrl: '',
+        hlsUrl: '',
+        thumbnail: '',
+      ),
+    );
+    final currentUrl = currentVideo.preferredVideoUrl.isNotEmpty
+        ? currentVideo.preferredVideoUrl
+        : (currentData['videoUrl'] ?? '').toString();
+    _pool.trimTo({url, currentUrl});
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 80), () async {
+        await _pool.get(url);
+      }),
     );
   }
 }
@@ -145,6 +215,7 @@ class _ReelsFeedState extends State<ReelsFeed> {
 class ReelItem extends StatefulWidget {
   final bool isActive;
   final String videoUrl;
+  final String thumbnailUrl;
   final String caption;
   final String userId;
   final VideoControllerPool pool;
@@ -153,6 +224,7 @@ class ReelItem extends StatefulWidget {
     super.key,
     required this.isActive,
     required this.videoUrl,
+    required this.thumbnailUrl,
     required this.caption,
     required this.userId,
     required this.pool,
@@ -164,6 +236,7 @@ class ReelItem extends StatefulWidget {
 
 class _ReelItemState extends State<ReelItem> {
   VideoPlayerController? _controller;
+  bool _initializing = false;
   bool liked = false;
   bool showHeart = false;
   bool showPlay = false;
@@ -172,16 +245,26 @@ class _ReelItemState extends State<ReelItem> {
   @override
   void initState() {
     super.initState();
+    _maybeInit();
+  }
+
+  void _maybeInit() {
+    if (!widget.isActive) return;
+    if (widget.videoUrl.trim().isEmpty) return;
+    if (_controller != null || _initializing) return;
     _init();
   }
 
   Future<void> _init() async {
-    _controller = await widget.pool.get(widget.videoUrl);
-    if (widget.isActive) _controller!.play();
-
-    username = await UserCache.getName(widget.userId);
-
-    if (mounted) setState(() {});
+    _initializing = true;
+    try {
+      _controller = await widget.pool.get(widget.videoUrl);
+      if (widget.isActive) _controller!.play();
+      username = await UserCache.getName(widget.userId);
+      if (mounted) setState(() {});
+    } finally {
+      _initializing = false;
+    }
   }
 
   @override
@@ -190,10 +273,17 @@ class _ReelItemState extends State<ReelItem> {
 
     /// URL guard
     if (oldWidget.videoUrl != widget.videoUrl) {
-      _init();
+      _controller?.pause();
+      _controller = null;
+      _maybeInit();
       return;
     }
 
+    if (widget.isActive && !oldWidget.isActive) {
+      _maybeInit();
+    }
+
+    // Only play when active; otherwise just pause (controller can stay cached).
     if (widget.isActive) {
       _controller?.play();
     } else {
@@ -230,17 +320,40 @@ class _ReelItemState extends State<ReelItem> {
 
   @override
   Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final decodeWidth = (mq.size.width * mq.devicePixelRatio).round();
+    final decodeHeight = (mq.size.height * mq.devicePixelRatio).round();
     if (_controller == null || !_controller!.value.isInitialized) {
-      return const Center(
-          child: CircularProgressIndicator(color: Colors.white));
+      if (widget.thumbnailUrl.trim().isNotEmpty) {
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            CachedNetworkImage(
+              imageUrl: widget.thumbnailUrl.trim(),
+              cacheManager: AppCacheManager.media,
+              fit: BoxFit.cover,
+              memCacheWidth: decodeWidth,
+              memCacheHeight: decodeHeight,
+              placeholder: (_, __) => Container(color: Colors.black),
+              errorWidget: (_, __, ___) => Container(color: Colors.black),
+            ),
+            const Center(
+              child: Icon(Icons.play_circle_fill, color: Colors.white, size: 64),
+            ),
+          ],
+        );
+      }
+      return const Center(child: CircularProgressIndicator(color: Colors.white));
     }
 
     final isBuffering = _controller!.value.isBuffering;
 
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: _togglePlay,
       onDoubleTap: _doubleTap,
-      child: Stack(
+      child: RepaintBoundary(
+        child: Stack(
         children: [
           /// VIDEO
           SizedBox.expand(
@@ -335,6 +448,7 @@ class _ReelItemState extends State<ReelItem> {
             ),
           ),
         ],
+        ),
       ),
     );
   }

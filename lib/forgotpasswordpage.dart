@@ -1,6 +1,7 @@
 import 'package:halo/main.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 // Halo theme colors (same as other screens)
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -18,18 +19,33 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   final TextEditingController _emailController = TextEditingController();
 
   // Function to handle form submission
-  void _resetPassword() {
+  void _resetPassword() async {
     if (_formKey.currentState?.validate() ?? false) {
-      // TODO: Integrate Firebase Auth password reset here if you want:
-      // await FirebaseAuth.instance.sendPasswordResetEmail(email: _emailController.text.trim());
+      try {
+        await FirebaseAuth.instance.sendPasswordResetEmail(
+          email: _emailController.text.trim(),
+        );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Password reset link sent to ${_emailController.text.trim()}',
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Password reset link sent to ${_emailController.text.trim()}',
+            ),
           ),
-        ),
-      );
+        );
+      } on FirebaseAuthException catch (e) {
+        String message = 'Something went wrong';
+
+        if (e.code == 'user-not-found') {
+          message = 'No user found with this email';
+        } else if (e.code == 'invalid-email') {
+          message = 'Invalid email address';
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
     }
   }
 

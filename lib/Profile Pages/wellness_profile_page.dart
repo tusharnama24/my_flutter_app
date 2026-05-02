@@ -171,6 +171,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       if (doc.exists) {
         final data = doc.data()!;
 
+        // For wellness owners, open directly on Business tab.
+        if (_isOwnProfile && mounted && _tabController.index == 0) {
+          _tabController.animateTo(1);
+        }
+
         _businessName = data['name'] ?? data['business_name'] ?? '';
         _username = data['username'] ?? '';
         _bio = data['bio'] ?? '';

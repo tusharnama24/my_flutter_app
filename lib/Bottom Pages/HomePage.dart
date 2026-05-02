@@ -1,8 +1,13 @@
 // HomePage.dart — Instagram-style feed for Halo
 // All bugs fixed — see fix comments tagged [FIX-n]
 
+import 'dart:async';
+import 'dart:collection';
+
 import 'package:halo/Bottom%20Pages/AddPostPage.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -17,7 +22,11 @@ import 'package:halo/Profile%20Pages/wellness_profile_page.dart'
 as wellness_profile;
 import 'package:halo/interest_selection_page.dart';
 import 'package:halo/services/story_service.dart';
+import 'package:halo/services/app_cache_manager.dart';
 import 'package:halo/models/story_model.dart';
+import 'package:halo/models/media_model.dart';
+import 'package:halo/utils/story_ranking.dart';
+import 'package:halo/utils/story_utils.dart';
 import 'package:halo/story/story_viewer_page.dart';
 import 'package:halo/story/story_upload_sheet.dart';
 
@@ -87,14 +96,30 @@ class _HomePageState extends State<HomePage> {
   int _feedTabIndex = 0;
   String _contentPreference = '';
 
-  int _feedRefreshKey = 0;
-  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _feedStream;
+  static const int _pageSize = 12;
+  final ScrollController _feedScrollController = ScrollController();
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> _posts = [];
+  bool _isLoadingFirstPage = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
+  QueryDocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+  bool _hasMoreUndated = true;
+  QueryDocumentSnapshot<Map<String, dynamic>>? _undatedLastDoc;
+  double _lastScrollOffset = 0;
+  bool _scrollingDown = true;
+  Timer? _precacheDebounce;
+  int _activeDecodes = 0;
+  static const int _maxConcurrentDecodes = 1;
+
+  Future<RankedStoriesResult>? _storiesFuture;
 
   // [FIX-7] Store SaveService stream and BottomNav user stream in state —
   // never create streams inside build() because each call creates a new
   // subscription and defeats StreamBuilder's internal caching.
-  late final Stream<Map<String, dynamic>> _savedPostsStream;
-  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _userDocStream;
+  final ValueNotifier<Map<String, dynamic>> _savedPostsNotifier =
+      ValueNotifier<Map<String, dynamic>>(const <String, dynamic>{});
+  StreamSubscription<Map<String, dynamic>>? _savedPostsSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userDocSub;
 
   // [FIX-4] Cache accountType so the BottomNav profile tap doesn't need
   // a Firestore read on every press.
@@ -104,8 +129,9 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _initFeedStream();
+    _feedScrollController.addListener(_onFeedScroll);
     _initSideStreams();
+    _storiesFuture = _loadStories();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybePromptForLocation();
     });
@@ -115,39 +141,282 @@ class _HomePageState extends State<HomePage> {
   // [FIX-7] Streams are created once here, not in build().
   void _initSideStreams() {
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    _savedPostsStream = uid.isNotEmpty
-        ? SaveService().savedPostsStream(uid)
-        : const Stream.empty();
+    if (uid.isEmpty) return;
 
-    if (uid.isNotEmpty) {
-      _userDocStream = FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .snapshots();
-      // [FIX-4] Listen once to cache accountType for profile navigation.
-      _userDocStream.listen((snap) {
-        if (!mounted) return;
-        final data = snap.data();
-        setState(() {
-          _accountType =
-              (data?['accountType'] as String?)?.toLowerCase() ?? 'aspirant';
-          _userProfileUrl = _profilePhotoUrlFromUser(data);
-        });
+    _savedPostsSub = SaveService().savedPostsStream(uid).listen((savedMap) {
+      _savedPostsNotifier.value = savedMap;
+    });
+
+    _userDocSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      final data = snap.data();
+      final nextType =
+          (data?['accountType'] as String?)?.toLowerCase() ?? 'aspirant';
+      final nextPhoto = _profilePhotoUrlFromUser(data);
+      if (nextType == _accountType && nextPhoto == _userProfileUrl) return;
+      setState(() {
+        _accountType = nextType;
+        _userProfileUrl = nextPhoto;
       });
-    } else {
-      _userDocStream = const Stream.empty();
+    });
+  }
+
+  @override
+  void dispose() {
+    _feedScrollController.dispose();
+    _precacheDebounce?.cancel();
+    _savedPostsSub?.cancel();
+    _userDocSub?.cancel();
+    _savedPostsNotifier.dispose();
+    super.dispose();
+  }
+
+  Future<RankedStoriesResult> _loadStories() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isEmpty) {
+      return const RankedStoriesResult(orderedUserIds: [], grouped: {});
+    }
+    final stories = await StoryService().fetchActiveStories().first;
+    final grouped = groupStoriesByUser(stories);
+    final userIds = grouped.keys.where((id) => id.isNotEmpty).toList();
+    final relScores = await StoryService().getRelationshipScores(uid, userIds);
+    final scored = <MapEntry<String, double>>[];
+    for (final storyUid in userIds) {
+      final list = grouped[storyUid] ?? const <StoryModel>[];
+      if (list.isEmpty) continue;
+      final newest = list.reduce(
+          (a, b) => a.createdAt.isAfter(b.createdAt) ? a : b);
+      final allViewers = list.expand((s) => s.viewers).toSet().toList();
+      final score = storyScore(
+        createdAt: newest.createdAt,
+        viewers: allViewers,
+        relationshipScore: relScores[storyUid] ?? 0.0,
+        currentUserId: uid,
+      );
+      scored.add(MapEntry(storyUid, score));
+    }
+    scored.sort((a, b) => b.value.compareTo(a.value));
+    final ordered = scored.map((e) => e.key).toList();
+    if (ordered.contains(uid)) {
+      ordered.remove(uid);
+    }
+    ordered.insert(0, uid);
+    return RankedStoriesResult(orderedUserIds: ordered, grouped: grouped);
+  }
+
+  void _onFeedScroll() {
+    if (!_feedScrollController.hasClients ||
+        _isLoadingMore ||
+        (!_hasMore && !_hasMoreUndated)) {
+      return;
+    }
+    final position = _feedScrollController.position;
+    final currentOffset = position.pixels;
+    _scrollingDown = currentOffset >= _lastScrollOffset;
+    _lastScrollOffset = currentOffset;
+
+    _precacheDebounce?.cancel();
+    _precacheDebounce = Timer(const Duration(milliseconds: 90), () {
+      _precacheUpcomingImages();
+    });
+    if (position.pixels >= position.maxScrollExtent - 900) {
+      _loadMorePosts();
     }
   }
 
-  void _initFeedStream() {
+  Future<void> _refreshFeed() async {
+    setState(() {
+      _isLoadingFirstPage = true;
+      _isLoadingMore = false;
+      _hasMore = true;
+      _hasMoreUndated = true;
+      _lastDoc = null;
+      _undatedLastDoc = null;
+      _posts.clear();
+    });
+    await _loadMorePosts(isRefresh: true);
+    if (mounted) {
+      setState(() {
+        _storiesFuture = _loadStories();
+      });
+    }
+  }
+
+  Future<void> _loadMorePosts({bool isRefresh = false}) async {
+    if ((_isLoadingMore && !isRefresh) ||
+        (!_hasMore && !_hasMoreUndated && !isRefresh)) return;
+    if (!mounted) return;
+
+    setState(() {
+      if (!isRefresh) _isLoadingMore = true;
+    });
+
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    _feedStream = _feedService.getRankedFeedStream(
-      currentUserId: uid,
-      // [FIX-11] _contentPreference is wired; extend FeedService to filter
-      // by following when _feedTabIndex == 1.
-      userPreference: _contentPreference,
-      followingOnly: _feedTabIndex == 1,
-    );
+    try {
+      final existingIds = _posts.map((p) => p.id).toSet();
+      var addedCount = 0;
+
+      final remainingBase = _pageSize;
+      var toAppend = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+
+      // 1) Fetch dated posts (createdAt exists)
+      if (_hasMore) {
+        final page = await _feedService.getRankedFeedPage(
+          currentUserId: uid,
+          userPreference: _contentPreference,
+          followingOnly: _feedTabIndex == 1,
+          limit: _pageSize,
+          startAfterDoc: _lastDoc,
+        );
+        _lastDoc = page.lastDoc;
+        _hasMore = page.hasMore;
+
+        var nextDocs = page.docs;
+        if (_interests.isNotEmpty) {
+          nextDocs = nextDocs.where((d) {
+            final data = d.data();
+            final accountType = (data['accountType'] ?? '')
+                .toString()
+                .toLowerCase();
+            if (accountType == 'guru') return true;
+            final tags = (data['tags'] as List?)
+                    ?.map((e) => e.toString())
+                    .toList() ??
+                const <String>[];
+            if (tags.isEmpty) return true;
+            return tags.any((t) => _interests.contains(t));
+          }).toList();
+        }
+
+        for (final d in nextDocs) {
+          if (existingIds.contains(d.id)) continue;
+          existingIds.add(d.id);
+          toAppend.add(d);
+          addedCount++;
+        }
+      }
+
+      // 2) Fetch undated posts (createdAt is null) with their own cursor.
+      final remaining = remainingBase - addedCount;
+      if (_hasMoreUndated && remaining > 0) {
+        final undatedPage = await _feedService.getRankedUndatedFeedPage(
+          currentUserId: uid,
+          userPreference: _contentPreference,
+          followingOnly: _feedTabIndex == 1,
+          limit: remaining,
+          startAfterDoc: _undatedLastDoc,
+        );
+        _undatedLastDoc = undatedPage.lastDoc;
+        _hasMoreUndated = undatedPage.hasMore;
+
+        var undatedDocs = undatedPage.docs;
+        if (_interests.isNotEmpty) {
+          undatedDocs = undatedDocs.where((d) {
+            final data = d.data();
+            final accountType = (data['accountType'] ?? '')
+                .toString()
+                .toLowerCase();
+            if (accountType == 'guru') return true;
+            final tags = (data['tags'] as List?)
+                    ?.map((e) => e.toString())
+                    .toList() ??
+                const <String>[];
+            if (tags.isEmpty) return true;
+            return tags.any((t) => _interests.contains(t));
+          }).toList();
+        }
+
+        for (final d in undatedDocs) {
+          if (existingIds.contains(d.id)) continue;
+          existingIds.add(d.id);
+          toAppend.add(d);
+          addedCount++;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _posts.addAll(toAppend);
+        _isLoadingFirstPage = false;
+        _isLoadingMore = false;
+      });
+      _precacheUpcomingImages();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingFirstPage = false;
+        _isLoadingMore = false;
+      });
+    }
+  }
+
+  void _precacheUpcomingImages() {
+    if (!mounted || !_feedScrollController.hasClients || _posts.isEmpty) return;
+    final isLargeDevice = MediaQuery.of(context).size.width >= 900;
+    const estimatedItemHeight = 520.0;
+    final anchor = (_feedScrollController.offset / estimatedItemHeight).floor();
+    final nextIndexes = _scrollingDown
+        ? <int>[anchor + 1, anchor + 2]
+        : <int>[anchor - 1, anchor - 2];
+    final valid = nextIndexes.where((i) => i >= 0 && i < _posts.length).toList(growable: false);
+    for (var i = 0; i < valid.length; i++) {
+      final postIndex = valid[i];
+      final data = _posts[postIndex].data();
+      final media = MediaModel.parsePostMedia(data);
+      if (media.isNotEmpty) {
+        final first = media.first;
+        if (first.isVideo) continue;
+        final url = first.image.forFeedByDevice(isLargeDevice);
+        if (url.isNotEmpty) {
+          final provider = CachedNetworkImageProvider(url);
+          if (i == 0) {
+            unawaited(_throttledPrecache(provider));
+          } else {
+            SchedulerBinding.instance.scheduleTask<void>(
+              () async {
+                await Future<void>.delayed(const Duration(milliseconds: 60));
+                await _throttledPrecache(provider);
+              },
+              Priority.idle,
+            );
+          }
+        }
+        continue;
+      }
+      final images = List<String>.from(data['images'] ?? const []);
+      final imageUrl = images.isNotEmpty ? images.first.trim() : '';
+      final fallback = (data['imageUrl'] as String?)?.trim() ?? '';
+      final url = imageUrl.isNotEmpty ? imageUrl : fallback;
+      if (url.isNotEmpty) {
+        final provider = CachedNetworkImageProvider(url);
+        if (i == 0) {
+          unawaited(_throttledPrecache(provider));
+        } else {
+          SchedulerBinding.instance.scheduleTask<void>(
+            () async {
+              await Future<void>.delayed(const Duration(milliseconds: 60));
+              await _throttledPrecache(provider);
+            },
+            Priority.idle,
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _throttledPrecache(ImageProvider provider) async {
+    if (!mounted) return;
+    if (_activeDecodes >= _maxConcurrentDecodes) return;
+    _activeDecodes++;
+    try {
+      await precacheImage(provider, context);
+    } finally {
+      _activeDecodes--;
+    }
   }
 
   Future<void> _loadInterests() async {
@@ -157,6 +426,9 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
       setState(() => _interests = interests);
     } catch (_) {}
+    if (mounted) {
+      await _refreshFeed();
+    }
   }
 
   Future<void> _maybePromptForLocation() async {
@@ -224,11 +496,8 @@ class _HomePageState extends State<HomePage> {
         return;
       case _HaloMenuAction.feed:
         if (!mounted) return;
-        setState(() {
-          _feedTabIndex = 0;
-          _feedRefreshKey++;
-          _initFeedStream();
-        });
+        setState(() => _feedTabIndex = 0);
+        await _refreshFeed();
         return;
       case _HaloMenuAction.premium:
         if (!mounted) return;
@@ -376,15 +645,10 @@ class _HomePageState extends State<HomePage> {
     final selected = _feedTabIndex == index;
     return Expanded(
       child: GestureDetector(
-        // [FIX-6] Switching tabs now re-creates the feed stream so the
-        // "Following" tab actually shows different content.
         onTap: () {
           if (_feedTabIndex == index) return;
-          setState(() {
-            _feedTabIndex = index;
-            _feedRefreshKey++;
-            _initFeedStream();
-          });
+          setState(() => _feedTabIndex = index);
+          _refreshFeed();
         },
         behavior: HitTestBehavior.opaque,
         child: Center(
@@ -403,14 +667,30 @@ class _HomePageState extends State<HomePage> {
 
   // [FIX-3] Navigate to profile using cached _accountType — no Firestore
   // read at tap time.
-  void _openMyProfile() {
+  Future<void> _openMyProfile() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Please sign in to view profile')));
       return;
     }
-    if (_accountType == 'wellness') {
+    var effectiveType = _accountType;
+    try {
+      final doc =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final freshType =
+          (doc.data()?['accountType'] as String?)?.toLowerCase().trim();
+      if (freshType != null && freshType.isNotEmpty) {
+        effectiveType = freshType;
+        if (mounted && effectiveType != _accountType) {
+          setState(() => _accountType = effectiveType);
+        }
+      }
+    } catch (_) {
+      // Use cached account type if profile fetch fails.
+    }
+
+    if (effectiveType == 'wellness') {
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -418,7 +698,7 @@ class _HomePageState extends State<HomePage> {
               wellness_profile.WellnessProfilePage(profileUserId: uid),
         ),
       );
-    } else if (_accountType == 'guru') {
+    } else if (effectiveType == 'guru') {
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -543,264 +823,81 @@ class _HomePageState extends State<HomePage> {
               top: false,
               child: RefreshIndicator(
                 key: _refreshKey,
-                onRefresh: () async {
-                  setState(() {
-                    _feedRefreshKey++;
-                    _initFeedStream();
-                  });
-                  await Future.delayed(const Duration(milliseconds: 400));
-                },
-                // [FIX-1] The SaveService stream is now stable (created in
-                // initState). The outer StreamBuilder no longer wraps the
-                // entire feed — savedPostsMap is passed directly to
-                // _PostActions, preventing full-list rebuilds on save events.
-                child: StreamBuilder<Map<String, dynamic>>(
-                  stream: _savedPostsStream,
-                  builder: (context, savedSnap) {
-                    final savedPostsMap =
-                        savedSnap.data ?? const <String, dynamic>{};
-                    return StreamBuilder<
-                        List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-                      key: ValueKey(_feedRefreshKey),
-                      stream: _feedStream,
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState ==
-                            ConnectionState.waiting) {
-                          return ListView(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12.0, vertical: 8.0),
-                            children: const [
-                              _StoriesStrip(),
-                              SizedBox(height: 12),
-                              Center(
-                                  child: Padding(
-                                    padding: EdgeInsets.all(24.0),
-                                    child: CircularProgressIndicator(),
-                                  )),
-                            ],
-                          );
-                        }
-                        if (snapshot.hasError) {
-                          return ListView(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12.0, vertical: 8.0),
-                            children: [
-                              const _StoriesStrip(),
-                              const SizedBox(height: 12),
-                              Padding(
-                                padding: const EdgeInsets.all(16.0),
-                                child: Text(
-                                    'Error loading posts: ${snapshot.error}'),
-                              ),
-                            ],
-                          );
-                        }
+                onRefresh: _refreshFeed,
+                child: ListView.builder(
+                  controller: _feedScrollController,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  cacheExtent: 1100,
+                  addAutomaticKeepAlives: false,
+                  addRepaintBoundaries: true,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 0, vertical: 8.0),
+                  itemCount: 2 + (_posts.isEmpty ? 1 : _posts.length) + 1,
+                  itemBuilder: (context, index) {
+                    if (index == 0) {
+                      return Column(
+                        children: [
+                          _StoriesStrip(future: _storiesFuture),
+                          const SizedBox(height: 12),
+                        ],
+                      );
+                    }
+                    if (index == 1) {
+                      return Column(
+                        children: [
+                          _buildFeedSegmentedControl(),
+                          const SizedBox(height: 8),
+                        ],
+                      );
+                    }
 
-                        final rankedDocs = snapshot.data ?? [];
-                        List<QueryDocumentSnapshot<Map<String, dynamic>>>
-                        filtered = rankedDocs;
-
-                        if (_interests.isNotEmpty) {
-                          filtered = rankedDocs.where((d) {
-                            final data = d.data();
-                            final accountType =
-                            (data['accountType'] ?? '').toString().toLowerCase();
-
-                            if (accountType == 'guru') return true;
-
-                            final tags = (data['tags'] as List?)
-                                ?.map((e) => e.toString())
-                                .toList() ?? [];
-
-                            // ✅ allow posts without tags
-                            if (tags.isEmpty) return true;
-
-                            return tags.any((t) => _interests.contains(t));
-                          }).toList();
-                        }
-
-                        final hasPosts = filtered.isNotEmpty;
-                        const headerCount = 2;
-                        final emptyStateCount = hasPosts ? 0 : 1;
-                        final totalCount =
-                            headerCount + filtered.length + emptyStateCount;
-
-                        return ListView.builder(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12.0, vertical: 8.0),
-                          itemCount: totalCount,
-                          itemBuilder: (context, index) {
-                            if (index == 0) {
-                              return const Column(
-                                children: [
-                                  _StoriesStrip(),
-                                  SizedBox(height: 12),
-                                ],
-                              );
-                            }
-                            if (index == 1) {
-                              return Column(
-                                children: [
-                                  _buildFeedSegmentedControl(),
-                                  const SizedBox(height: 8),
-                                ],
-                              );
-                            }
-                            if (!hasPosts) {
-                              return Padding(
-                                padding: const EdgeInsets.all(24.0),
-                                child: Column(
-                                  children: [
-                                    Icon(Icons.inbox_outlined,
-                                        size: 40,
-                                        color: Colors.grey.shade500),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      'No posts yet',
-                                      style: textTheme.titleMedium?.copyWith(
-                                          color: Colors.grey.shade700),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Follow more people or add your first post.',
-                                      textAlign: TextAlign.center,
-                                      style: textTheme.bodySmall?.copyWith(
-                                          color: Colors.grey.shade600),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }
-
-                            final feedIndex = index - headerCount;
-                            final data = filtered[feedIndex].data();
-                            final media =
-                                (data['media'] as List?)?.cast<dynamic>() ??
-                                    const [];
-                            final images = List<String>.from(
-                                data['images'] ?? const []);
-                            final imageUrl =
-                                (data['imageUrl'] as String?)?.trim() ?? '';
-                            final caption =
-                            (data['caption'] ?? '').toString();
-                            final location =
-                            (data['location'] ?? '').toString();
-                            final createdAt =
-                            data['createdAt'] as Timestamp?;
-                            final createdText = createdAt != null
-                                ? createdAt
-                                .toDate()
-                                .toLocal()
-                                .toString()
-                                .substring(0, 16)
-                                : '';
-                            final userId =
-                            (data['userId'] ?? '').toString();
-
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 4.0, vertical: 6.0),
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: kIgPostBackground,
-                                  borderRadius: BorderRadius.circular(10),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color:
-                                      Colors.black.withOpacity(0.06),
-                                      blurRadius: 8,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(10),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                    children: [
-                                      userId.isNotEmpty
-                                          ? _PostUserHeader(
-                                        userId: userId,
-                                        subtitle: location.isNotEmpty
-                                            ? location
-                                            : createdText,
-                                      )
-                                          : _PostHeader(
-                                        username: 'User',
-                                        profilePhotoUrl: '',
-                                        subtitle: location.isNotEmpty
-                                            ? location
-                                            : createdText,
-                                        onTap: null,
-                                      ),
-                                      _DoubleTapHeartOverlay(
-                                        postId: filtered[feedIndex].id,
-                                        child: media.isNotEmpty
-                                            ? _PostMedia(
-                                          media: media,
-                                          onVideoTap: () {
-                                            Navigator.push(
-                                              context,
-                                              MaterialPageRoute(
-                                                builder: (_) =>
-                                                    ExplorePage(
-                                                      openReelsOnStart:
-                                                      true,
-                                                      initialReelPostId:
-                                                      filtered[feedIndex]
-                                                          .id,
-                                                    ),
-                                              ),
-                                            );
-                                          },
-                                        )
-                                            : (images.isNotEmpty &&
-                                            images.first
-                                                .trim()
-                                                .isNotEmpty
-                                            ? _PostImage(
-                                            url: images.first)
-                                            : imageUrl
-                                            .trim()
-                                            .isNotEmpty
-                                            ? _PostImage(
-                                            url: imageUrl)
-                                            : const SizedBox
-                                            .shrink()),
-                                      ),
-                                      _PostActions(
-                                        postId: filtered[feedIndex].id,
-                                        savedPostsMap: savedPostsMap,
-                                      ),
-                                      if (caption.isNotEmpty)
-                                        Padding(
-                                          padding: const EdgeInsets
-                                              .symmetric(
-                                              horizontal: 16.0,
-                                              vertical: 10.0),
-                                          child: Text(
-                                            caption,
-                                            style: textTheme.bodyMedium
-                                                ?.copyWith(
-                                              color: kIgPrimaryText,
-                                              fontSize: 15,
-                                              height: 1.35,
-                                            ),
-                                          ),
-                                        ),
-                                      const SizedBox(height: 8),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
+                    if (_posts.isEmpty) {
+                      if (_isLoadingFirstPage) {
+                        return const Padding(
+                          padding: EdgeInsets.all(24.0),
+                          child: Center(child: CircularProgressIndicator()),
                         );
-                      },
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.all(24.0),
+                        child: Column(
+                          children: [
+                            Icon(Icons.inbox_outlined,
+                                size: 40, color: Colors.grey.shade500),
+                            const SizedBox(height: 8),
+                            Text(
+                              'No posts yet',
+                              style: textTheme.titleMedium
+                                  ?.copyWith(color: Colors.grey.shade700),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Follow more people or add your first post.',
+                              textAlign: TextAlign.center,
+                              style: textTheme.bodySmall
+                                  ?.copyWith(color: Colors.grey.shade600),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    final footerIndex = 2 + _posts.length;
+                    if (index == footerIndex) {
+                      if (_isLoadingMore) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      return const SizedBox(height: 8);
+                    }
+
+                    final feedIndex = index - 2;
+                    return _PostItem(
+                      key: ValueKey(_posts[feedIndex].id),
+                      postDoc: _posts[feedIndex],
+                      savedPostsListenable: _savedPostsNotifier,
                     );
                   },
                 ),
@@ -959,24 +1056,55 @@ class _PostHeader extends StatelessWidget {
 
 class _PostImage extends StatelessWidget {
   final String url;
-  const _PostImage({Key? key, required this.url}) : super(key: key);
+  final String thumbUrl;
+  const _PostImage({Key? key, required this.url, this.thumbUrl = ''}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return CachedNetworkImage(
-      imageUrl: url,
-      height: 300,
-      width: double.infinity,
-      fit: BoxFit.cover,
-      placeholder: (_, __) => Container(
-        height: 300,
-        color: Colors.grey.shade200,
-        child: const Center(child: CircularProgressIndicator()),
-      ),
-      errorWidget: (_, __, ___) => Container(
-        height: 300,
-        color: Colors.grey[300],
-        child: const Center(child: Icon(Icons.broken_image)),
+    final mq = MediaQuery.of(context);
+    final dpr = mq.devicePixelRatio;
+    final decodeWidth = (mq.size.width * dpr).round();
+    final decodeHeight = (300 * dpr).round();
+    final deferLoading = Scrollable.recommendDeferredLoadingForContext(context);
+    final fallbackUrl = url.replaceAll('.webp', '.jpg');
+    return RepaintBoundary(
+      child: deferLoading
+          ? (thumbUrl.isNotEmpty
+          ? CachedNetworkImage(
+        imageUrl: thumbUrl,
+        cacheManager: AppCacheManager.media,
+        width: double.infinity,
+        fit: BoxFit.fitWidth,
+        memCacheWidth: decodeWidth,
+      )
+          : Container(height: 250, color: Colors.grey.shade200))
+          : CachedNetworkImage(
+        imageUrl: url,
+        cacheManager: AppCacheManager.media,
+        width: double.infinity,
+        memCacheWidth: decodeWidth,
+        fit: BoxFit.fitWidth,
+        fadeInDuration: const Duration(milliseconds: 140),
+        placeholder: (_, __) => thumbUrl.isNotEmpty
+            ? CachedNetworkImage(
+          imageUrl: thumbUrl,
+          width: double.infinity,
+          fit: BoxFit.fitWidth,
+          placeholder: (_, __) => Container(height: 250, color: Colors.grey.shade200),
+          errorWidget: (_, __, ___) => Container(height: 250, color: Colors.grey.shade200),
+        )
+            : Container(height: 250, color: Colors.grey.shade200),
+        errorWidget: (_, __, ___) => fallbackUrl != url
+            ? Image.network(
+          fallbackUrl,
+          width: double.infinity,
+          fit: BoxFit.fitWidth,
+        )
+            : Container(
+          height: 250,
+          color: Colors.grey[300],
+          child: const Center(child: Icon(Icons.broken_image)),
+        ),
       ),
     );
   }
@@ -984,32 +1112,15 @@ class _PostImage extends StatelessWidget {
 
 // ---------------------- Stories Strip ----------------------
 
-class _StoriesStrip extends StatefulWidget {
-  const _StoriesStrip({Key? key}) : super(key: key);
-
-  @override
-  State<_StoriesStrip> createState() => _StoriesStripState();
-}
-
-class _StoriesStripState extends State<_StoriesStrip> {
-  Stream<RankedStoriesResult>? _rankedStream;
-  String? _myUid;
-
-  @override
-  void initState() {
-    super.initState();
-    _myUid = FirebaseAuth.instance.currentUser?.uid;
-    if (_myUid != null && _myUid!.isNotEmpty) {
-      _rankedStream = StoryService().fetchStoriesRanked(_myUid!);
-    }
-  }
+class _StoriesStrip extends StatelessWidget {
+  final Future<RankedStoriesResult>? future;
+  const _StoriesStrip({Key? key, required this.future}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    final textTheme =
-    GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
-
-    if (_myUid == null || _myUid!.isEmpty) {
+    final textTheme = GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+    final myUid = FirebaseAuth.instance.currentUser?.uid;
+    if (myUid == null || myUid.isEmpty) {
       return const SizedBox(height: 110);
     }
 
@@ -1023,55 +1134,46 @@ class _StoriesStripState extends State<_StoriesStrip> {
               Text(
                 'Stories',
                 style: textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade900),
+                    fontWeight: FontWeight.w600, color: Colors.grey.shade900),
               ),
               const Spacer(),
-              GestureDetector(
-                onTap: () {},
-                child: Text(
-                  'See all',
-                  style: textTheme.bodySmall?.copyWith(
-                      color: kSecondaryColor,
-                      fontWeight: FontWeight.w500),
-                ),
+              Text(
+                'See all',
+                style: textTheme.bodySmall?.copyWith(
+                    color: kSecondaryColor, fontWeight: FontWeight.w500),
               ),
             ],
           ),
         ),
         SizedBox(
           height: 110,
-          child: StreamBuilder<RankedStoriesResult>(
-            stream: _rankedStream,
+          child: FutureBuilder<RankedStoriesResult>(
+            future: future,
             builder: (context, snapshot) {
-              if (!snapshot.hasData) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(
                     child: CircularProgressIndicator(strokeWidth: 2));
               }
-
-              final result = snapshot.data!;
+              final result = snapshot.data ??
+                  const RankedStoriesResult(orderedUserIds: [], grouped: {});
               final groupedStories = result.grouped;
               final userIds = <String>[
-                _myUid!,
-                ...result.orderedUserIds.where((id) => id != _myUid),
+                myUid,
+                ...result.orderedUserIds.where((id) => id != myUid),
               ];
 
               return ListView.builder(
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 itemCount: userIds.length,
                 itemBuilder: (context, index) {
                   final userId = userIds[index];
-
-                  if (userId == _myUid) {
-                    final myStories = groupedStories[_myUid!] ?? [];
+                  if (userId == myUid) {
+                    final myStories = groupedStories[myUid] ?? [];
                     final hasStories = myStories.isNotEmpty;
-                    final hasUnseen = myStories
-                        .any((s) => !s.viewers.contains(_myUid));
-                    final photoUrl =
-                    hasStories ? myStories.first.userPhotoUrl : null;
-
+                    final hasUnseen =
+                        myStories.any((s) => !s.viewers.contains(myUid));
+                    final photoUrl = hasStories ? myStories.first.userPhotoUrl : null;
                     return GestureDetector(
                       onTap: () {
                         showModalBottomSheet(
@@ -1086,13 +1188,11 @@ class _StoriesStripState extends State<_StoriesStrip> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (_) =>
-                                  StoryViewerPage(stories: myStories)),
+                              builder: (_) => StoryViewerPage(stories: myStories)),
                         );
                       },
                       child: Padding(
-                        padding:
-                        const EdgeInsets.symmetric(horizontal: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -1101,8 +1201,7 @@ class _StoriesStripState extends State<_StoriesStrip> {
                               children: [
                                 _StoryAvatar(
                                   imageUrl: photoUrl,
-                                  hasUnseen:
-                                  hasStories && hasUnseen,
+                                  hasUnseen: hasStories && hasUnseen,
                                   isSeen: hasStories && !hasUnseen,
                                 ),
                                 const Positioned(
@@ -1112,8 +1211,7 @@ class _StoriesStripState extends State<_StoriesStrip> {
                                     radius: 10,
                                     backgroundColor: Colors.blue,
                                     child: Icon(Icons.add,
-                                        size: 16,
-                                        color: Colors.white),
+                                        size: 16, color: Colors.white),
                                   ),
                                 ),
                               ],
@@ -1121,8 +1219,7 @@ class _StoriesStripState extends State<_StoriesStrip> {
                             const SizedBox(height: 6),
                             const Text('Your story',
                                 style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.black87)),
+                                    fontSize: 12, color: Colors.black87)),
                           ],
                         ),
                       ),
@@ -1131,23 +1228,18 @@ class _StoriesStripState extends State<_StoriesStrip> {
 
                   final stories = groupedStories[userId] ?? [];
                   if (stories.isEmpty) return const SizedBox.shrink();
-
-                  final hasUnseen =
-                  stories.any((s) => !s.viewers.contains(_myUid));
+                  final hasUnseen = stories.any((s) => !s.viewers.contains(myUid));
                   final first = stories.first;
-
                   return GestureDetector(
                     onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                            builder: (_) =>
-                                StoryViewerPage(stories: stories)),
+                            builder: (_) => StoryViewerPage(stories: stories)),
                       );
                     },
                     child: Padding(
-                      padding:
-                      const EdgeInsets.symmetric(horizontal: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -1160,14 +1252,11 @@ class _StoriesStripState extends State<_StoriesStrip> {
                           SizedBox(
                             width: 70,
                             child: Text(
-                              first.username.isNotEmpty
-                                  ? first.username
-                                  : 'User',
+                              first.username.isNotEmpty ? first.username : 'User',
                               overflow: TextOverflow.ellipsis,
                               textAlign: TextAlign.center,
                               style: textTheme.bodySmall?.copyWith(
-                                  fontSize: 12,
-                                  color: Colors.black87),
+                                  fontSize: 12, color: Colors.black87),
                             ),
                           ),
                         ],
@@ -1560,12 +1649,20 @@ class _PostMedia extends StatelessWidget {
 
     final first = Map<String, dynamic>.from(media.first as Map);
     final type = (first['type'] ?? 'image').toString();
-    final url = (first['url'] ?? '').toString().trim();
+    final url = (type == 'video'
+            ? (first['videoUrl'] ?? first['url'] ?? '')
+            : (first['medium'] ?? first['full'] ?? first['thumb'] ?? first['url'] ?? ''))
+        .toString()
+        .trim();
+    final thumbUrl = (first['thumb'] ?? first['thumbnail'] ?? first['thumbnailUrl'] ?? '')
+        .toString()
+        .trim();
     final trimStartMs = _asIntNullable(first['trimStartMs']);
     final trimEndMs = _asIntNullable(first['trimEndMs']);
 
     if (type == 'video') {
       return GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: onVideoTap,
         child: SizedBox(
             height: 300,
@@ -1587,7 +1684,7 @@ class _PostMedia extends StatelessWidget {
               Icon(Icons.image_not_supported, color: Colors.grey)));
     }
 
-    return _PostImage(url: url);
+    return _PostImage(url: url, thumbUrl: thumbUrl);
   }
 }
 
@@ -1609,6 +1706,11 @@ class _NetworkVideo extends StatefulWidget {
 }
 
 class _NetworkVideoState extends State<_NetworkVideo> {
+  static const int _maxCachedControllers = 3;
+  static final LinkedHashMap<String, VideoPlayerController> _videoCache =
+      LinkedHashMap<String, VideoPlayerController>();
+  static final Set<String> _visibleKeys = <String>{};
+
   VideoPlayerController? _controller;
   bool _initStarted = false;
   bool _initialized = false;
@@ -1616,6 +1718,8 @@ class _NetworkVideoState extends State<_NetworkVideo> {
   bool _isVisible = false;
   Duration _effectiveTrimStart = Duration.zero;
   Duration? _effectiveTrimEnd;
+  Timer? _initDebounce;
+  String? _cacheKey;
 
   @override
   void initState() {
@@ -1639,14 +1743,28 @@ class _NetworkVideoState extends State<_NetworkVideo> {
     if (_initStarted || widget.url.trim().isEmpty) return;
     _initStarted = true;
     try {
-      final controller =
-      VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      final key = widget.url.trim();
+      _cacheKey = key;
+      final cachedController = _videoCache[key];
+      final controller = cachedController ??
+          VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      _videoCache.remove(key);
+      _videoCache[key] = controller;
+      _evictIfNeeded(excludeKey: key);
       _controller = controller;
+      if (controller.value.isInitialized) {
+        _updateTrimBounds();
+        controller
+          ..setLooping(false)
+          ..addListener(_enforceTrimWindow);
+        _initialized = true;
+        _syncPlayback();
+        if (mounted) setState(() {});
+        return;
+      }
       controller.initialize().then((_) {
         if (!mounted) {
-          // [FIX-9] Dispose controller if widget was already removed
-          // from the tree before initialization completed.
-          controller.dispose();
+          _pauseAndHide();
           return;
         }
         _updateTrimBounds();
@@ -1659,17 +1777,56 @@ class _NetworkVideoState extends State<_NetworkVideo> {
         setState(() => _initialized = true);
         _syncPlayback();
       }).catchError((Object _) {
-        // [FIX-9] Dispose on error path too.
-        controller.dispose();
+        _removeControllerFromCache();
         _controller = null;
         if (!mounted) return;
         setState(() => _error = true);
       });
     } catch (_) {
-      _controller?.dispose();
+      _removeControllerFromCache();
       _controller = null;
       if (mounted) setState(() => _error = true);
     }
+  }
+
+  void _removeControllerFromCache() {
+    final key = _cacheKey;
+    if (key == null) return;
+    final controller = _videoCache[key];
+    if (controller != null) {
+      _videoCache.remove(key);
+      controller.dispose();
+    }
+    _visibleKeys.remove(key);
+    _cacheKey = null;
+  }
+
+  void _evictIfNeeded({required String excludeKey}) {
+    while (_videoCache.length > _maxCachedControllers) {
+      String? evictionKey;
+      for (final key in _videoCache.keys) {
+        if (key == excludeKey) continue;
+        if (_visibleKeys.contains(key)) continue;
+        evictionKey = key;
+        break;
+      }
+      evictionKey ??= _videoCache.keys.firstWhere(
+        (k) => k != excludeKey,
+        orElse: () => excludeKey,
+      );
+      if (evictionKey == excludeKey) break;
+      final controller = _videoCache.remove(evictionKey);
+      _visibleKeys.remove(evictionKey);
+      controller?.dispose();
+    }
+  }
+
+  void _pauseAndHide() {
+    final key = _cacheKey;
+    if (key != null) {
+      _visibleKeys.remove(key);
+    }
+    _controller?.pause();
   }
 
   void _syncPlayback() {
@@ -1717,8 +1874,9 @@ class _NetworkVideoState extends State<_NetworkVideo> {
 
   @override
   void dispose() {
+    _initDebounce?.cancel();
     _controller?.removeListener(_enforceTrimWindow);
-    _controller?.dispose();
+    _pauseAndHide();
     super.dispose();
   }
 
@@ -1728,11 +1886,27 @@ class _NetworkVideoState extends State<_NetworkVideo> {
       key: Key('home_video_${widget.url.hashCode}'),
       onVisibilityChanged: (info) {
         final visibleNow = info.visibleFraction > 0.6;
-        if (visibleNow && !_initStarted) {
-          _initIfNeeded();
+        if (visibleNow && !_initStarted && _initDebounce == null) {
+          _initDebounce = Timer(const Duration(milliseconds: 220), () {
+            _initDebounce = null;
+            if (!mounted || !_isVisible) return;
+            _initIfNeeded();
+          });
+        }
+        if (!visibleNow) {
+          _initDebounce?.cancel();
+          _initDebounce = null;
         }
         if (_isVisible != visibleNow) {
           _isVisible = visibleNow;
+          final key = _cacheKey;
+          if (key != null) {
+            if (visibleNow) {
+              _visibleKeys.add(key);
+            } else {
+              _visibleKeys.remove(key);
+            }
+          }
           _syncPlayback();
         }
       },
@@ -1889,17 +2063,180 @@ class _PostUserHeaderState extends State<_PostUserHeader> {
   }
 }
 
+class _PostItem extends StatelessWidget {
+  final QueryDocumentSnapshot<Map<String, dynamic>> postDoc;
+  final ValueListenable<Map<String, dynamic>> savedPostsListenable;
+
+  const _PostItem({
+    Key? key,
+    required this.postDoc,
+    required this.savedPostsListenable,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+    final data = postDoc.data();
+    final parsedMedia = MediaModel.parsePostMedia(data);
+    final media = parsedMedia
+        .map((m) => <String, dynamic>{
+              'type': m.type,
+              'url': m.isVideo ? m.videoUrl : m.image.forFeed(),
+              'videoUrl': m.videoUrl,
+              'thumb': m.image.thumb,
+              'medium': m.image.medium,
+              'full': m.image.full,
+              'thumbnail': m.thumbnail,
+              if (m.trimStartMs != null) 'trimStartMs': m.trimStartMs,
+              if (m.trimEndMs != null) 'trimEndMs': m.trimEndMs,
+            })
+        .toList(growable: false);
+    final images = List<String>.from(data['images'] ?? const []);
+    final imageUrl = (data['imageUrl'] as String?)?.trim() ?? '';
+    final videoUrl = (data['videoUrl'] ?? data['mediaUrl'] ?? data['reelUrl'] ?? '')
+        .toString()
+        .trim();
+    final thumbnailUrl =
+        (data['thumbnailUrl'] ?? data['thumbUrl'] ?? '').toString().trim();
+    final trimStartMs = _asIntNullable(data['trimStartMs']);
+    final trimEndMs = _asIntNullable(data['trimEndMs']);
+    final isLargeDevice = MediaQuery.of(context).size.width >= 900;
+    final parsedFirstImage = parsedMedia
+        .firstWhere(
+          (m) => m.isImage && m.image.hasAny,
+          orElse: () => const MediaModel(
+            type: 'image',
+            image: MediaVariant(thumb: '', medium: '', full: ''),
+            videoUrl: '',
+            hlsUrl: '',
+            thumbnail: '',
+          ),
+        )
+        .image
+        .forFeedByDevice(isLargeDevice);
+    final mediaForPost = media.isNotEmpty
+        ? media
+        : (videoUrl.isNotEmpty
+            ? [
+                <String, dynamic>{
+                  'type': 'video',
+                  'url': videoUrl,
+                  'trimStartMs': trimStartMs,
+                  'trimEndMs': trimEndMs,
+                }
+              ]
+            : const []);
+    final effectiveImageUrl = parsedFirstImage.isNotEmpty
+        ? parsedFirstImage
+        : (imageUrl.isNotEmpty
+            ? imageUrl
+            : (thumbnailUrl.isNotEmpty ? thumbnailUrl : ''));
+    final caption = (data['caption'] ?? '').toString();
+    final location = (data['location'] ?? '').toString();
+    final createdAt = data['createdAt'] as Timestamp?;
+    final createdText = createdAt != null
+        ? createdAt.toDate().toLocal().toString().substring(0, 16)
+        : '';
+    final userId = (data['userId'] ?? '').toString();
+
+    return RepaintBoundary(
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 8.0),
+        elevation: 1,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12)),
+        clipBehavior: Clip.antiAlias,
+        color: kIgPostBackground,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            userId.isNotEmpty
+                ? _PostUserHeader(
+              userId: userId,
+              subtitle:
+              location.isNotEmpty ? location : createdText,
+            )
+                : _PostHeader(
+              username: 'User',
+              profilePhotoUrl: '',
+              subtitle:
+              location.isNotEmpty ? location : createdText,
+              onTap: null,
+            ),
+
+            _DoubleTapHeartOverlay(
+              postId: postDoc.id,
+              child: mediaForPost.isNotEmpty
+                  ? _PostMedia(
+                media: mediaForPost,
+                onVideoTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ExplorePage(
+                        openReelsOnStart: true,
+                        initialReelPostId: postDoc.id,
+                      ),
+                    ),
+                  );
+                },
+              )
+                  : (images.isNotEmpty &&
+                  images.first.trim().isNotEmpty
+                  ? _PostImage(url: images.first)
+                  : effectiveImageUrl.trim().isNotEmpty
+                  ? _PostImage(url: effectiveImageUrl)
+                  : const SizedBox.shrink()),
+            ),
+
+            _PostActions(
+              postId: postDoc.id,
+              initialLikeCount: _asInt(data['likeCount']),
+              initialCommentCount: _asInt(data['commentCount']),
+              savedPostsListenable: savedPostsListenable,
+            ),
+
+            if (caption.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16.0, vertical: 10.0),
+                child: Text(
+                  caption,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: kIgPrimaryText,
+                    fontSize: 15,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ---------------------- Post Actions ----------------------
 // [FIX-2] postData prop removed. likeCount and commentCount are now fetched
 // from a live stream on the post document so counts never go stale.
 
 class _PostActions extends StatefulWidget {
   final String postId;
-  final Map<String, dynamic>? savedPostsMap;
+  final int initialLikeCount;
+  final int initialCommentCount;
+  final ValueListenable<Map<String, dynamic>> savedPostsListenable;
 
-  const _PostActions(
-      {Key? key, required this.postId, this.savedPostsMap})
-      : super(key: key);
+  const _PostActions({
+    Key? key,
+    required this.postId,
+    required this.initialLikeCount,
+    required this.initialCommentCount,
+    required this.savedPostsListenable,
+  }) : super(key: key);
 
   @override
   State<_PostActions> createState() => _PostActionsState();
@@ -1908,14 +2245,49 @@ class _PostActions extends StatefulWidget {
 class _PostActionsState extends State<_PostActions> {
   final String? _currentUserId =
       FirebaseAuth.instance.currentUser?.uid;
+  late int _likeCount;
+  late int _commentCount;
+  bool _isLiked = false;
+  bool _isLikeBusy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _likeCount = widget.initialLikeCount;
+    _commentCount = widget.initialCommentCount;
+    _loadInitialLikeStatus();
+  }
+
+  Future<void> _loadInitialLikeStatus() async {
+    final currentUserId = _currentUserId;
+    if (currentUserId == null) return;
+    try {
+      final likeDoc = await FirebaseFirestore.instance
+          .collection('posts')
+          .doc(widget.postId)
+          .collection('likes')
+          .doc(currentUserId)
+          .get();
+      if (!mounted) return;
+      setState(() => _isLiked = likeDoc.exists);
+    } catch (_) {}
+  }
 
   Future<void> _toggleLike() async {
+    if (_isLikeBusy) return;
     final currentUserId = _currentUserId;
     if (currentUserId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Please sign in to like posts')));
       return;
     }
+    final nextLikeValue = !_isLiked;
+    setState(() {
+      _isLikeBusy = true;
+      _isLiked = nextLikeValue;
+      _likeCount += nextLikeValue ? 1 : -1;
+      if (_likeCount < 0) _likeCount = 0;
+    });
     try {
       final postRef =
       FirebaseFirestore.instance.collection('posts').doc(widget.postId);
@@ -1934,124 +2306,115 @@ class _PostActionsState extends State<_PostActions> {
         }
       });
     } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLiked = !nextLikeValue;
+          _likeCount += nextLikeValue ? -1 : 1;
+          if (_likeCount < 0) _likeCount = 0;
+        });
+      }
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Error updating like: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _isLikeBusy = false);
+      }
     }
   }
 
-  void _showComments() {
-    Navigator.push(
+  Future<void> _showComments() async {
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => _CommentsPage(postId: widget.postId),
       ),
     );
+    try {
+      final postDoc = await FirebaseFirestore.instance
+          .collection('posts')
+          .doc(widget.postId)
+          .get();
+      if (!mounted) return;
+      final freshCount = _asInt(postDoc.data()?['commentCount']);
+      setState(() => _commentCount = freshCount);
+    } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
     final textTheme =
     GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+    final likeCount = _likeCount;
+    final commentCount = _commentCount;
+    final isLiked = _isLiked;
 
-    // [FIX-2] Single StreamBuilder on the post document gives live
-    // likeCount, commentCount, AND the current user's like status —
-    // no stale snapshot from the feed.
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('posts')
-          .doc(widget.postId)
-          .snapshots(),
-      builder: (context, postSnap) {
-        final postData = postSnap.data?.data() ?? const <String, dynamic>{};
-        final likeCount = _asInt(postData['likeCount']);
-        final commentCount = _asInt(postData['commentCount']);
-
-        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: _currentUserId == null
-              ? null
-              : FirebaseFirestore.instance
-              .collection('posts')
-              .doc(widget.postId)
-              .collection('likes')
-              .doc(_currentUserId)
-              .snapshots(),
-          builder: (context, likeSnap) {
-            final isLiked = likeSnap.data?.exists ?? false;
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    IconButton(
-                      icon: Icon(
-                        isLiked ? Icons.favorite : Icons.favorite_border,
-                        color: isLiked ? kIgLikeRed : kIgPrimaryText,
-                        size: 28,
-                      ),
-                      onPressed: _toggleLike,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.chat_bubble_outline,
-                          size: 26, color: kIgPrimaryText),
-                      onPressed: _showComments,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 8),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.send_outlined,
-                          size: 26, color: kIgPrimaryText),
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content:
-                                Text('Share functionality coming soon!')));
-                      },
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 8),
-                    ),
-                    const Spacer(),
-                    SaveButton(
-                      postId: widget.postId,
-                      currentUserId: _currentUserId,
-                      savedPostsMap: widget.savedPostsMap,
-                      iconSize: 26,
-                      color: kIgPrimaryText,
-                    ),
-                  ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            IconButton(
+              icon: Icon(
+                isLiked ? Icons.favorite : Icons.favorite_border,
+                color: isLiked ? kIgLikeRed : kIgPrimaryText,
+                size: 28,
+              ),
+              onPressed: _toggleLike,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+            IconButton(
+              icon: Icon(Icons.chat_bubble_outline, size: 26, color: kIgPrimaryText),
+              onPressed: _showComments,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            ),
+            IconButton(
+              icon: Icon(Icons.send_outlined, size: 26, color: kIgPrimaryText),
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Share functionality coming soon!')));
+              },
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            ),
+            const Spacer(),
+            ValueListenableBuilder<Map<String, dynamic>>(
+              valueListenable: widget.savedPostsListenable,
+              builder: (_, savedMap, __) {
+                return SaveButton(
+                  postId: widget.postId,
+                  currentUserId: _currentUserId,
+                  savedPostsMap: savedMap,
+                  iconSize: 26,
+                  color: kIgPrimaryText,
+                );
+              },
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$likeCount ${likeCount == 1 ? 'like' : 'likes'}',
+                style: textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: kIgPrimaryText,
+                    fontSize: 14),
+              ),
+              const SizedBox(height: 4),
+              GestureDetector(
+                onTap: _showComments,
+                child: Text(
+                  'View all $commentCount ${commentCount == 1 ? 'comment' : 'comments'}',
+                  style: textTheme.bodyMedium
+                      ?.copyWith(color: kIgSecondaryText, fontSize: 14),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16.0, vertical: 4.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '$likeCount ${likeCount == 1 ? 'like' : 'likes'}',
-                        style: textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: kIgPrimaryText,
-                            fontSize: 14),
-                      ),
-                      const SizedBox(height: 4),
-                      GestureDetector(
-                        onTap: _showComments,
-                        child: Text(
-                          'View all $commentCount ${commentCount == 1 ? 'comment' : 'comments'}',
-                          style: textTheme.bodyMedium
-                              ?.copyWith(color: kIgSecondaryText, fontSize: 14),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

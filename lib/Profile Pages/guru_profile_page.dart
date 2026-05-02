@@ -1290,6 +1290,80 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     );
   }
 
+  Widget _buildGuruInlineTabsRow() {
+    return AnimatedBuilder(
+      animation: _tabController,
+      builder: (context, _) {
+        final current = _tabController.index.clamp(0, 1);
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            children: [
+              Expanded(
+                child: _buildGuruInlineTabChip(
+                  label: 'Profile',
+                  icon: Icons.grid_on_outlined,
+                  selected: current == 0,
+                  onTap: () => _tabController.animateTo(0),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildGuruInlineTabChip(
+                  label: 'Business',
+                  icon: Icons.dashboard_outlined,
+                  selected: current == 1,
+                  onTap: () => _tabController.animateTo(1),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildGuruInlineTabChip({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+        decoration: BoxDecoration(
+          color: selected ? _deepLavender : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? _deepLavender : Colors.grey.shade300,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: selected ? Colors.white : Colors.black87,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : Colors.black87,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ===================================================================
   //  BUILD
   // ===================================================================
@@ -1309,15 +1383,18 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             ? const Center(child: CircularProgressIndicator())
             : GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onHorizontalDragEnd: (details) {
-            final vx = details.primaryVelocity ?? 0;
-            if (vx.abs() < 250) return;
-            if (vx < 0 && _tabController.index < _tabController.length - 1) {
-              _tabController.animateTo(_tabController.index + 1);
-            } else if (vx > 0 && _tabController.index > 0) {
-              _tabController.animateTo(_tabController.index - 1);
-            }
-          },
+          onHorizontalDragEnd: _isOwnProfile
+              ? (details) {
+                  final vx = details.primaryVelocity ?? 0;
+                  if (vx.abs() < 250) return;
+                  if (vx < 0 &&
+                      _tabController.index < _tabController.length - 1) {
+                    _tabController.animateTo(_tabController.index + 1);
+                  } else if (vx > 0 && _tabController.index > 0) {
+                    _tabController.animateTo(_tabController.index - 1);
+                  }
+                }
+              : null,
           child: NestedScrollView(
           headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
             return [
@@ -1326,37 +1403,39 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 expandedHeight: _coverHeight,
                 backgroundColor: _lavender,
                 elevation: 0,
-                bottom: PreferredSize(
-                  preferredSize: const Size.fromHeight(58),
-                  child: Container(
-                    color: Colors.white,
-                    child: TabBar(
-                      controller: _tabController,
-                      indicatorColor: _lavender,
-                      indicatorWeight: 3,
-                      labelColor: Colors.black87,
-                      unselectedLabelColor: Colors.black54,
-                      labelStyle: GoogleFonts.poppins(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      unselectedLabelStyle: GoogleFonts.poppins(
-                        fontSize: 14,
-                        fontWeight: FontWeight.normal,
-                      ),
-                      tabs: const [
-                        Tab(
-                          icon: Icon(Icons.grid_on_outlined, size: 20),
-                          text: 'Profile',
+                bottom: _isOwnProfile
+                    ? PreferredSize(
+                        preferredSize: const Size.fromHeight(58),
+                        child: Container(
+                          color: Colors.white,
+                          child: TabBar(
+                            controller: _tabController,
+                            indicatorColor: _lavender,
+                            indicatorWeight: 3,
+                            labelColor: Colors.black87,
+                            unselectedLabelColor: Colors.black54,
+                            labelStyle: GoogleFonts.poppins(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            unselectedLabelStyle: GoogleFonts.poppins(
+                              fontSize: 14,
+                              fontWeight: FontWeight.normal,
+                            ),
+                            tabs: const [
+                              Tab(
+                                icon: Icon(Icons.grid_on_outlined, size: 20),
+                                text: 'Profile',
+                              ),
+                              Tab(
+                                icon: Icon(Icons.dashboard_outlined, size: 20),
+                                text: 'Business',
+                              ),
+                            ],
+                          ),
                         ),
-                        Tab(
-                          icon: Icon(Icons.dashboard_outlined, size: 20),
-                          text: 'Business',
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                      )
+                    : null,
                 leading: IconButton(
                   icon: const Icon(Icons.arrow_back),
                   onPressed: () => Navigator.pop(context),
@@ -1440,18 +1519,28 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               SliverToBoxAdapter(
                 child: _buildProfileHeaderSection(),
               ),
+              if (_isOwnProfile)
+                SliverToBoxAdapter(
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 10),
+                      _buildGuruInlineTabsRow(),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
             ];
           },
-          body: TabBarView(
-            controller: _tabController,
-            physics: const BouncingScrollPhysics(),
-            children: [
-              // First Tab - Posts/Content (placeholder for future features)
-              _buildFirstTab(),
-              // Second Tab - Existing Guru Sections
-              _buildSecondTab(),
-            ],
-          ),
+          body: _isOwnProfile
+              ? TabBarView(
+                  controller: _tabController,
+                  physics: const BouncingScrollPhysics(),
+                  children: [
+                    _buildFirstTab(),
+                    _buildSecondTab(),
+                  ],
+                )
+              : _buildFirstTab(),
         ),
         ),
       ),
@@ -1469,11 +1558,12 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 20),
-              // CTA Buttons
-              _buildCTAButtons(),
-              const SizedBox(height: 12),
-              _buildBusinessFeaturesShortcut(),
-              const SizedBox(height: 24),
+              if (_isOwnProfile) ...[
+                _buildCTAButtons(),
+                const SizedBox(height: 12),
+                _buildBusinessFeaturesShortcut(),
+                const SizedBox(height: 24),
+              ],
               // Popular Products Section (Figma Design)
               _buildPopularProductsSection(),
               const SizedBox(height: 24),

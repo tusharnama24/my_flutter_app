@@ -66,6 +66,9 @@ dependencies:
   visibility_detector: ^0.4.0+2
   flutter_riverpod: ^2.6.1
   video_thumbnail: ^0.5.3
+  flutter_image_compress: ^2.4.0
+  crypto: ^3.0.7
+  flutter_cache_manager: ^3.4.1
 
 
 

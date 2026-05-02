@@ -27,7 +27,6 @@ import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/Bottom Pages/saved_posts_page.dart';
 import 'package:halo/utils/search_utils.dart';
 import 'package:halo/services/follow_service.dart';
-import 'package:halo/widgets/follow_button.dart';
 import 'package:halo/widgets/stats_widget.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_identity_block.dart';
@@ -118,6 +117,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   bool _isFollowing = false;
   bool _isPrivate = false;
   bool _isLoading = true;
+  int _selectedAspirantTab = 0;
+  final Map<String, bool> _suggestedFollowLoading = {};
 
   // Image picker
   final ImagePicker _picker = ImagePicker();
@@ -734,40 +735,258 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   //  NEW ASPIRANT UI SECTIONS (HOBBY FOCUSED)
   // ===================================================================
 
-  /// Tabs – abhi sirf visual
+  /// Aspirant profile tabs
   Widget _buildAspirantTabsRow() {
-    final tabs = ['Overview', 'Coaches', 'Wellness', 'Community'];
+    final tabs = ['Aspirant', 'Coaches', 'Wellness', 'Community'];
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 4),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: tabs
-            .map(
-              (t) => Expanded(
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 2),
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              decoration: BoxDecoration(
-                color: t == 'Overview'
-                    ? Colors.blue
-                    : Colors.grey.shade200,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                t,
-                textAlign: TextAlign.center,
-                style: GoogleFonts.poppins(
-                  fontSize: 11,
-                  color: t == 'Overview'
-                      ? Colors.white
-                      : Colors.black87,
+        children: List.generate(tabs.length, (index) {
+          final isSelected = _selectedAspirantTab == index;
+          return Expanded(
+            child: GestureDetector(
+              onTap: () {
+                if (_selectedAspirantTab == index) return;
+                setState(() => _selectedAspirantTab = index);
+              },
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: isSelected ? Colors.blue : Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  tabs[index],
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    color: isSelected ? Colors.white : Colors.black87,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ),
-          ),
-        )
-            .toList(),
+          );
+        }),
       ),
+    );
+  }
+
+  Widget _buildAspirantTabContent() {
+    switch (_selectedAspirantTab) {
+      case 0: // Aspirant
+        return Column(
+          children: [
+            _buildSimilarAspirantsSection(),
+            _buildHobbiesSection(),
+          ],
+        );
+      case 1: // Coaches
+        return _buildSuggestedGurusSection();
+      case 2: // Wellness
+        return _buildSuggestedWellnessSection();
+      case 3: // Community
+        return Column(
+          children: [
+            _buildEventsChallengesSection(),
+            _buildSocialLinksSection(),
+          ],
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  List<String> _toLowerTrimmedList(dynamic raw) {
+    if (raw is! List) return const [];
+    return raw
+        .map((e) => e.toString().trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+
+  String _commonMatchText(Map<String, dynamic> data) {
+    final mine = _interests
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toSet();
+    final theirs = <String>{
+      ..._toLowerTrimmedList(data['interests']),
+      ..._toLowerTrimmedList(data['specialties']),
+      ..._toLowerTrimmedList(data['services']),
+      (data['primaryCategory'] ?? '').toString().trim().toLowerCase(),
+      (data['category'] ?? '').toString().trim().toLowerCase(),
+      (data['wellness_category'] ?? '').toString().trim().toLowerCase(),
+    }..removeWhere((e) => e.isEmpty);
+
+    final common = mine.intersection(theirs).toList();
+    if (common.isNotEmpty) {
+      final first = common.first;
+      return '${first[0].toUpperCase()}${first.substring(1)} in common';
+    }
+
+    final fallback = (data['primaryCategory'] ??
+            data['category'] ??
+            data['wellness_category'] ??
+            '')
+        .toString()
+        .trim();
+    return fallback.isNotEmpty ? fallback : 'Suggested for you';
+  }
+
+  void _openSuggestedUserProfile({
+    required String userId,
+    required String accountType,
+  }) {
+    if (userId.isEmpty) return;
+    if (accountType == 'guru') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => guru_profile.GuruProfilePage(profileUserId: userId),
+        ),
+      );
+      return;
+    }
+    if (accountType == 'wellness') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              wellness_profile.WellnessProfilePage(profileUserId: userId),
+        ),
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProfilePage(profileUserId: userId),
+      ),
+    );
+  }
+
+  Future<void> _toggleSuggestedFollow({
+    required String profileUserId,
+    required bool isCurrentlyFollowing,
+  }) async {
+    final currentUid = _currentUser?.uid;
+    if (currentUid == null || profileUserId.isEmpty || profileUserId == currentUid) {
+      return;
+    }
+    setState(() => _suggestedFollowLoading[profileUserId] = true);
+    try {
+      await _followService.setFollowState(
+        currentUserId: currentUid,
+        profileUserId: profileUserId,
+        shouldFollow: !isCurrentlyFollowing,
+      );
+    } catch (_) {
+      Fluttertoast.showToast(msg: 'Could not update follow right now');
+    } finally {
+      if (!mounted) return;
+      setState(() => _suggestedFollowLoading[profileUserId] = false);
+    }
+  }
+
+  Widget _buildSuggestedFollowButton(String targetUserId) {
+    final currentUid = _currentUser?.uid;
+    if (currentUid == null || currentUid == targetUserId) {
+      return const SizedBox.shrink();
+    }
+    final loading = _suggestedFollowLoading[targetUserId] == true;
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _firestore
+          .collection('users')
+          .doc(targetUserId)
+          .collection('followers')
+          .doc(currentUid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final isFollowing = snapshot.data?.exists ?? false;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: _firestore
+                  .collection('users')
+                  .doc(currentUid)
+                  .collection('followers')
+                  .doc(targetUserId)
+                  .snapshots(),
+              builder: (context, reverseSnap) {
+                final followsYou = reverseSnap.data?.exists ?? false;
+                final isFollowBack = followsYou && !isFollowing;
+                final topLabel = isFollowBack ? 'Follow back' : null;
+                return Column(
+                  children: [
+                    if (topLabel != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Text(
+                          topLabel,
+                          style: GoogleFonts.poppins(
+                            fontSize: 8.5,
+                            color: _deepLavender,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    SizedBox(
+                      height: 26,
+                      child: OutlinedButton(
+                        onPressed: loading
+                            ? null
+                            : () => _toggleSuggestedFollow(
+                                  profileUserId: targetUserId,
+                                  isCurrentlyFollowing: isFollowing,
+                                ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                          side: BorderSide(
+                            color: isFollowing ? Colors.grey.shade400 : _deepLavender,
+                          ),
+                          backgroundColor: isFollowing ? Colors.white : _deepLavender,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: loading
+                            ? const SizedBox(
+                                width: 12,
+                                height: 12,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Text(
+                                isFollowing ? 'Following' : 'Follow',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 9,
+                                  color: isFollowing ? Colors.black87 : Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                      ),
+                    ),
+                    if (followsYou)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          'Follows you',
+                          style: GoogleFonts.poppins(
+                            fontSize: 8,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -850,50 +1069,69 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     final category =
                     (data['primaryCategory'] ?? '') as String;
                     final photo = data['profilePhoto'] as String?;
-                    return Container(
-                      width: 90,
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 6,
-                            offset: const Offset(0, 3),
-                          )
-                        ],
+                    final matchText = _commonMatchText(data);
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => _openSuggestedUserProfile(
+                        userId: d.id,
+                        accountType: 'guru',
                       ),
-                      child: Column(
-                        children: [
-                          CircleAvatar(
-                            radius: 22,
-                            backgroundImage: photo != null
-                                ? NetworkImage(photo)
-                                : const AssetImage(
-                              'assets/images/Profile.png',
-                            ) as ImageProvider,
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
+                      child: Container(
+                        width: 110,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            )
+                          ],
+                        ),
+                        child: Column(
+                          children: [
+                            CircleAvatar(
+                              radius: 22,
+                              backgroundImage: photo != null
+                                  ? NetworkImage(photo)
+                                  : const AssetImage(
+                                      'assets/images/Profile.png',
+                                    ) as ImageProvider,
                             ),
-                          ),
-                          if (category.isNotEmpty)
+                            const SizedBox(height: 6),
                             Text(
-                              category,
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              category.isNotEmpty ? category : matchText,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.poppins(
                                 fontSize: 10,
+                                color: Colors.black54,
                               ),
                             ),
-                        ],
+                            Text(
+                              matchText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.poppins(
+                                fontSize: 9,
+                                color: Colors.blueGrey,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            _buildSuggestedFollowButton(d.id),
+                          ],
+                        ),
                       ),
                     );
                   },
@@ -964,60 +1202,77 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     final category =
                     (data['primaryCategory'] ?? '') as String;
                     final photo = data['profilePhoto'] as String?;
-                    return Container(
-                      width: 140,
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 6,
-                            offset: const Offset(0, 3),
-                          )
-                        ],
+                    final matchText = _commonMatchText(data);
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => _openSuggestedUserProfile(
+                        userId: d.id,
+                        accountType: 'wellness',
                       ),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 20,
-                            backgroundImage: photo != null
-                                ? NetworkImage(photo)
-                                : const AssetImage(
-                              'assets/images/Profile.png',
-                            ) as ImageProvider,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment:
-                              CrossAxisAlignment.start,
-                              mainAxisAlignment:
-                              MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                if (category.isNotEmpty)
+                      child: Container(
+                        width: 150,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            )
+                          ],
+                        ),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 20,
+                              backgroundImage: photo != null
+                                  ? NetworkImage(photo)
+                                  : const AssetImage(
+                                      'assets/images/Profile.png',
+                                    ) as ImageProvider,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
                                   Text(
-                                    category,
+                                    name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    category.isNotEmpty ? category : matchText,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: GoogleFonts.poppins(
                                       fontSize: 10,
+                                      color: Colors.black54,
                                     ),
                                   ),
-                              ],
+                                  Text(
+                                    matchText,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 9,
+                                      color: Colors.blueGrey,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  _buildSuggestedFollowButton(d.id),
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     );
                   },
@@ -1091,43 +1346,75 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     final name = (data['name'] ?? 'User') as String;
                     final username = (data['username'] ?? '') as String;
                     final photo = data['profilePhoto'] as String?;
-                    return Column(
-                      children: [
-                        CircleAvatar(
-                          radius: 24,
-                          backgroundImage: photo != null
-                              ? NetworkImage(photo)
-                              : const AssetImage(
-                            'assets/images/Profile.png',
-                          ) as ImageProvider,
+                    final matchText = _commonMatchText(data);
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => _openSuggestedUserProfile(
+                        userId: d.id,
+                        accountType:
+                            (data['accountType'] ?? 'aspirant').toString().toLowerCase(),
+                      ),
+                      child: Container(
+                        width: 110,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            )
+                          ],
                         ),
-                        const SizedBox(height: 4),
-                        SizedBox(
-                          width: 70,
-                          child: Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.poppins(
-                              fontSize: 10,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircleAvatar(
+                              radius: 22,
+                              backgroundImage: photo != null
+                                  ? NetworkImage(photo)
+                                  : const AssetImage(
+                                      'assets/images/Profile.png',
+                                    ) as ImageProvider,
                             ),
-                          ),
-                        ),
-                        if (username.isNotEmpty)
-                          SizedBox(
-                            width: 70,
-                            child: Text(
-                              '@$username',
+                            const SizedBox(height: 6),
+                            Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              username.isNotEmpty ? '@$username' : matchText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                color: Colors.black54,
+                              ),
+                            ),
+                            Text(
+                              matchText,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               textAlign: TextAlign.center,
                               style: GoogleFonts.poppins(
                                 fontSize: 9,
+                                color: Colors.blueGrey,
                               ),
                             ),
-                          ),
-                      ],
+                            const SizedBox(height: 4),
+                            _buildSuggestedFollowButton(d.id),
+                          ],
+                        ),
+                      ),
                     );
                   },
                 );
@@ -2409,11 +2696,19 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   @override
   Widget build(BuildContext context) {
     final baseTheme = Theme.of(context);
-    final textTheme = baseTheme.textTheme.apply(
-      bodyColor: Colors.black87,
-      displayColor: Colors.black87,
-    );
 
+    // 🔥 Detect background brightness
+    final isDarkBg =
+        ThemeData.estimateBrightnessForColor(_bg) == Brightness.dark;
+
+    // 🔥 Dynamic text color
+    final textColor = isDarkBg ? Colors.white : Colors.black87;
+
+    // 🔥 Apply dynamic text theme
+    final textTheme = baseTheme.textTheme.apply(
+      bodyColor: textColor,
+      displayColor: textColor,
+    );
     return Theme(
       data: baseTheme.copyWith(textTheme: textTheme),
       child: Scaffold(
@@ -2428,16 +2723,26 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
               backgroundColor: _lavender,
               elevation: 0,
               leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
+                icon: Icon(
+                  Icons.arrow_back,
+                  color: isDarkBg ? Colors.white : Colors.black,
+                ),
                 onPressed: () => Navigator.pop(context),
               ),
               actions: [
                 if (_isOwnProfile) ...[
                   IconButton(
-                    icon: const Icon(Icons.add_box_outlined),
+                    icon: Icon(
+                      Icons.add_box_outlined,
+                      color: isDarkBg ? Colors.white : Colors.black,
+                    ),
                     onPressed: _openGalleryForPost,
                   ),
                   PopupMenuButton<String>(
+                    icon: Icon(
+                      Icons.more_vert,
+                      color: isDarkBg ? Colors.white : Colors.black,
+                    ),
                     onSelected: (value) async {
                       if (value == 'Edit Profile') {
                         await _handleEditProfile();
@@ -2545,15 +2850,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
                   // Halo-style sections
                   _buildAspirantTabsRow(),
-                  _buildSuggestedGurusSection(),
-                  _buildSuggestedWellnessSection(),
-                  _buildSimilarAspirantsSection(),
+                  _buildAspirantTabContent(),
                   _buildAchievementsSection(),
                   _buildLastWorkoutsSection(),
                   _buildRecentPostsGrid(),
-                  _buildEventsChallengesSection(),
-                  _buildSocialLinksSection(),
-                  _buildHobbiesSection(),
                   _buildFitnessArticlesSection(),
                   _buildFitnessStatsSection(),
                   

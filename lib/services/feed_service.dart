@@ -28,7 +28,7 @@ class FeedService {
 
       // ✅ APPLY FOLLOWING FILTER
       if (followingOnly && currentUserId.isNotEmpty) {
-        final followingIds = await _getFollowingIds(currentUserId);
+        final followingIds = await getFollowingIds(currentUserId);
 
         if (followingIds.isNotEmpty) {
           docs = docs
@@ -49,8 +49,110 @@ class FeedService {
     });
   }
 
+  Future<({
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    QueryDocumentSnapshot<Map<String, dynamic>>? lastDoc,
+    bool hasMore,
+  })> getRankedFeedPage({
+    required String currentUserId,
+    String userPreference = '',
+    bool followingOnly = false,
+    int limit = 12,
+    QueryDocumentSnapshot<Map<String, dynamic>>? startAfterDoc,
+  }) async {
+    Query<Map<String, dynamic>> query = _firestore
+        .collection('posts')
+        .orderBy('createdAt', descending: true)
+        .limit(limit);
+
+    if (startAfterDoc != null) {
+      query = query.startAfterDocument(startAfterDoc);
+    }
+
+    final snapshot = await query.get();
+    var docs = snapshot.docs;
+
+    if (followingOnly && currentUserId.isNotEmpty) {
+      final followingIds = await getFollowingIds(currentUserId);
+      if (followingIds.isEmpty) {
+        return (
+          docs: const <QueryDocumentSnapshot<Map<String, dynamic>>>[],
+          lastDoc: null,
+          hasMore: false,
+        );
+      }
+      docs = docs
+          .where((d) => followingIds.contains((d.data()['userId'] ?? '')))
+          .toList();
+    }
+
+    final ranked = await rankPosts(
+      docs: docs,
+      currentUserId: currentUserId,
+      userPreference: userPreference,
+    );
+
+    return (
+      docs: ranked,
+      lastDoc: snapshot.docs.isNotEmpty ? snapshot.docs.last : startAfterDoc,
+      hasMore: snapshot.docs.length >= limit,
+    );
+  }
+
+  /// 🔹 UNDated pagination: createdAt is null
+  Future<({
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    QueryDocumentSnapshot<Map<String, dynamic>>? lastDoc,
+    bool hasMore,
+  })> getRankedUndatedFeedPage({
+    required String currentUserId,
+    String userPreference = '',
+    bool followingOnly = false,
+    int limit = 12,
+    QueryDocumentSnapshot<Map<String, dynamic>>? startAfterDoc,
+  }) async {
+    Query<Map<String, dynamic>> query = _firestore
+        .collection('posts')
+        .where('createdAt', isNull: true)
+        .orderBy(FieldPath.documentId)
+        .limit(limit);
+
+    if (startAfterDoc != null) {
+      query = query.startAfterDocument(startAfterDoc);
+    }
+
+    final snapshot = await query.get();
+    var docs = snapshot.docs;
+
+    if (followingOnly && currentUserId.isNotEmpty) {
+      final followingIds = await getFollowingIds(currentUserId);
+      if (followingIds.isEmpty) {
+        return (
+          docs: const <QueryDocumentSnapshot<Map<String, dynamic>>>[],
+          lastDoc: null,
+          hasMore: false,
+        );
+      }
+      docs = docs
+          .where((d) => followingIds.contains((d.data()['userId'] ?? '')))
+          .toList();
+    }
+
+    final ranked = await rankPosts(
+      docs: docs,
+      currentUserId: currentUserId,
+      userPreference: userPreference,
+    );
+
+    return (
+      docs: ranked,
+      lastDoc: snapshot.docs.isNotEmpty ? snapshot.docs.last : startAfterDoc,
+      hasMore: snapshot.docs.length >= limit,
+    );
+  }
+
   // 🔹 GET FOLLOWING USERS
-  Future<List<String>> _getFollowingIds(String userId) async {
+  Future<List<String>> getFollowingIds(String userId) async {
     try {
       final snapshot = await _firestore
           .collection('users')

@@ -289,7 +289,7 @@ class _LoginPageState extends State<LoginPage> {
                                 "Login ID",
                                 style: textTheme.labelMedium?.copyWith(
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.grey.shade900,
+                                  color: Colors.white,
                                 ),
                               ),
                             ),
@@ -319,7 +319,7 @@ class _LoginPageState extends State<LoginPage> {
                                 "Password / OTP",
                                 style: textTheme.labelMedium?.copyWith(
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.grey.shade900,
+                                  color: Colors.white,
                                 ),
                               ),
                             ),
