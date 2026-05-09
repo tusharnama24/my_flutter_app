@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
-
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:halo/services/image_service.dart';
 
@@ -47,7 +47,8 @@ class UploadService {
     final generated = await _imageService.buildAdaptiveSet(imageFile);
 
     final suffix = index == 0 ? '' : '_$index';
-    final base = _storage.ref('posts/$postId');
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final base = _storage.ref('users/$uid/posts/$postId');
     final contentType = SettableMetadata(
       contentType: 'image/webp',
       cacheControl: 'public,max-age=31536000,immutable',
@@ -109,7 +110,8 @@ class UploadService {
     int? trimEndMs,
   }) async {
     final suffix = index == 0 ? '' : '_$index';
-    final base = _storage.ref('posts/$postId');
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final base = _storage.ref('users/$uid/posts/$postId');
     final videoRef = base.child('video$suffix.mp4');
 
     await videoRef.putFile(

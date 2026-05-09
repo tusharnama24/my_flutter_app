@@ -11,6 +11,7 @@
 // [V8] Video grid tile: uses firstVideoUrl for thumbnail extraction
 // [V9] Reels PageController initialPage set correctly
 // [V10] All StreamBuilders merged per-post (no redundant listeners)
+// [V11] _VideoCell: pool-first bind, no visibility-based controller drop, preload dedupe
 
 import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -42,6 +43,182 @@ const int   _kPageSize   = 10;
 // ─────────────────────────────────────────────────────────────────────────────
 // POST MODEL
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VIDEO CONTROLLER POOL
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _PooledController {
+  final String url;
+  VideoPlayerController controller;
+  bool isInitialized = false;
+  bool isDisposed = false;
+  DateTime lastUsed = DateTime.now();
+
+  _PooledController({required this.url, required this.controller});
+}
+
+class VideoControllerPool {
+  VideoControllerPool._();
+  static final VideoControllerPool instance = VideoControllerPool._();
+
+  static const int _maxPoolSize = 5;
+  final Map<String, _PooledController> _pool = {};
+  final List<String> _lruOrder = [];
+  final Map<String, Future<VideoPlayerController?>> _preloadInflight = {};
+
+  /// Single in-flight [preload] per URL so parallel callers share one init.
+  Future<VideoPlayerController?> preload(String url) {
+    if (url.isEmpty) return Future.value(null);
+    return _preloadInflight.putIfAbsent(url, () {
+      return _preloadBody(url).whenComplete(() {
+        _preloadInflight.remove(url);
+      });
+    });
+  }
+
+  Future<VideoPlayerController?> getOrPreload(String url) async {
+    final existing = get(url);
+    if (existing != null) return existing;
+    return await preload(url);
+  }
+
+  Future<VideoPlayerController?> _preloadBody(String url) async {
+    if (_pool.containsKey(url)) {
+      _touch(url);
+      final entry = _pool[url]!;
+      if (entry.isDisposed) return null;
+      if (entry.isInitialized) return entry.controller;
+      try {
+        await entry.controller.initialize();
+        if (!entry.isDisposed) {
+          entry.isInitialized = true;
+          await entry.controller.setLooping(true);
+        }
+      } catch (_) {
+        _remove(url);
+        return null;
+      }
+      return entry.controller;
+    }
+
+    await _evictIfNeeded();
+
+    final ctrl = VideoPlayerController.networkUrl(
+      Uri.parse(url),
+      videoPlayerOptions: VideoPlayerOptions(
+        mixWithOthers: true,
+        allowBackgroundPlayback: false,
+      ),
+    );
+
+    final entry = _PooledController(url: url, controller: ctrl);
+    _pool[url] = entry;
+    _lruOrder.add(url);
+
+    try {
+      // ✅ Initialize only once safely
+      if (!entry.isInitialized && !entry.isDisposed) {
+        await ctrl.initialize();
+
+        if (!entry.isDisposed) {
+          entry.isInitialized = true;
+
+          // ✅ Reels should loop
+          await ctrl.setLooping(true);
+
+          // ❌ DO NOT force mute here
+          // Let UI control volume
+          // await ctrl.setVolume(0);  ← REMOVE THIS
+        }
+      }
+    } catch (e) {
+      _remove(url);
+      return null;
+    }
+
+    return ctrl;
+  }
+
+  VideoPlayerController? get(String url) {
+    final entry = _pool[url];
+
+    if (entry != null && entry.isInitialized && !entry.isDisposed) {
+      _touch(url);
+      return entry.controller;
+    }
+
+    return null;
+  }
+
+  bool isReady(String url) =>
+      _pool.containsKey(url) && _pool[url]!.isInitialized && !_pool[url]!.isDisposed;
+
+  void _touch(String url) {
+    _pool[url]?.lastUsed = DateTime.now();
+    _lruOrder.remove(url);
+    _lruOrder.add(url);
+  }
+
+  Future<void> _evictIfNeeded() async {
+    while (_pool.length >= _maxPoolSize && _lruOrder.isNotEmpty) {
+      final oldest = _lruOrder.first;
+      _remove(oldest);
+    }
+  }
+
+  void _remove(String url) {
+    final entry = _pool.remove(url);
+    _lruOrder.remove(url);
+    if (entry != null && !entry.isDisposed) {
+      entry.isDisposed = true;
+      entry.controller.dispose();
+    }
+  }
+
+  void release(String url) {
+    _touch(url);
+  }
+
+  void disposeAll() {
+    for (final url in List.of(_pool.keys)) {
+      _remove(url);
+    }
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REEL PREFETCH MANAGER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class ReelPrefetchManager {
+  ReelPrefetchManager._();
+  static final ReelPrefetchManager instance = ReelPrefetchManager._();
+
+  int _lastIndex = -1;
+
+  Future<void> prefetchAround(List<String> videoUrls, int currentIndex) async {
+    if (currentIndex == _lastIndex) return;
+    _lastIndex = currentIndex;
+
+    final indices = <int>{};
+    for (int i = -1; i <= 2; i++) {
+      final idx = currentIndex + i;
+      if (idx >= 0 && idx < videoUrls.length && idx != currentIndex) {
+        indices.add(idx);
+      }
+    }
+
+    for (final idx in indices) {
+      final url = videoUrls[idx];
+      if (url.isNotEmpty && !VideoControllerPool.instance.isReady(url)) {
+        unawaited(VideoControllerPool.instance.preload(url));
+      }
+    }
+  }
+}
+
 
 class PostMediaItem {
   final String url;
@@ -196,19 +373,27 @@ class PostModel {
   static List<PostMediaItem> _parseMediaItems(Map<String, dynamic> data) {
 
     // ✅ PRIORITY 1: images[] (ALWAYS FIRST)
-    if (data['images'] is List && (data['images'] as List).isNotEmpty) {
-      final list = data['images'] as List;
+    // FIRST check media (videos/images mixed)
+    if (data['media'] is List && (data['media'] as List).isNotEmpty) {
+      final list = data['media'] as List;
 
-      return list.map((url) {
-        final u = url.toString();
+      return list.map((item) {
+        final map = item as Map<String, dynamic>;
+
+        final type = (map['type'] ?? 'image').toString();
+        final url = (map['url'] ?? '').toString();
+        final thumb = (map['thumbnail'] ?? '').toString();
+
         return PostMediaItem(
-          url: u,
-          isVideo: false,
-          thumb: u,
-          medium: u,
-          full: u,
+          url: url,
+          isVideo: type == 'video',
+          thumb: thumb.isNotEmpty ? thumb : url,
+          medium: url,
+          full: url,
+          videoUrl: type == 'video' ? url : '',
+          thumbnail: thumb,
         );
-      }).toList(growable: false);
+      }).toList();
     }
 
     // 🔹 THEN fallback to parsed media
@@ -241,29 +426,6 @@ class PostModel {
           thumbnail: m.thumbnail ?? '',
           trimStartMs: m.trimStartMs,
           trimEndMs: m.trimEndMs,
-        );
-      }).toList(growable: false);
-    }
-
-    // 🔹 media[] fallback
-    if (data['media'] is List && (data['media'] as List).isNotEmpty) {
-      final list = data['media'] as List;
-
-      return list.map((item) {
-        final map = item as Map<String, dynamic>;
-
-        final type = (map['type'] ?? 'image').toString();
-        final url = (map['url'] ?? '').toString();
-        final thumb = (map['thumbnail'] ?? '').toString();
-
-        return PostMediaItem(
-          url: url,
-          isVideo: type == 'video',
-          thumb: thumb.isNotEmpty ? thumb : url,
-          medium: url,
-          full: url,
-          videoUrl: type == 'video' ? url : '',
-          thumbnail: thumb,
         );
       }).toList(growable: false);
     }
@@ -959,11 +1121,12 @@ class _ExploreGridTile extends StatelessWidget {
     final dpr = MediaQuery.of(context).devicePixelRatio;
     final decode = (MediaQuery.of(context).size.width / 3 * dpr).round();
     final imageUrl = post.firstImageUrl;
-    final videoThumbUrl = post.thumbnailUrl.isNotEmpty
+    final videoThumbUrl =
+    post.thumbnailUrl.isNotEmpty
         ? post.thumbnailUrl
-        : (post.firstVideoItem?.thumbnail.isNotEmpty == true
+        : (post.firstVideoItem?.thumbnail ?? '').isNotEmpty
         ? post.firstVideoItem!.thumbnail
-        : post.firstVideoItem?.forGrid() ?? '');
+        : (post.firstVideoItem?.url ?? '');
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -1230,6 +1393,13 @@ class _MediaCarouselState extends State<_MediaCarousel> {
             // 🔥 FIX: update page only; avoid hidden preloads here
             onPageChanged: (i) {
               setState(() => _page = i);
+              final videoUrls = widget.mediaItems
+                  .where((m) => m.isVideo)
+                  .map((m) => m.forFeed())
+                  .toList();
+              if (videoUrls.isNotEmpty) {
+                ReelPrefetchManager.instance.prefetchAround(videoUrls, i);
+              }
             },
 
             itemBuilder: (_, i) {
@@ -1249,13 +1419,12 @@ class _MediaCarouselState extends State<_MediaCarousel> {
                     ? _VideoCell(
                   key: ValueKey('media_${m.forFeed()}'),
                   url: m.forFeed(),
+                  thumbnailUrl: m.thumbnail.isNotEmpty ? m.thumbnail : m.thumb,  // ← ADD
                   trimStartMs: m.trimStartMs,
                   trimEndMs: m.trimEndMs,
                   fit: BoxFit.cover,
-
-                  // 🔥 FIX: only current video should autoplay
                   autoPlay: i == _page,
-
+                  warmUp: (i - _page).abs() == 1,   // ← ADD
                   visibilityKey: 'media_${m.forFeed().hashCode}_$i',
                 )
 
@@ -1804,8 +1973,13 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex;
-    // [V9] initialPage must match _currentIndex
     _controller = PageController(initialPage: widget.initialIndex);
+
+    // Preload first reel + next 2 immediately
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final urls = widget.videoPosts.map((p) => p.firstVideoUrl).toList();
+      ReelPrefetchManager.instance.prefetchAround(urls, _currentIndex);
+    });
   }
 
   @override
@@ -1842,6 +2016,10 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
         itemCount: widget.videoPosts.length,
         onPageChanged: (i) {
           setState(() => _currentIndex = i);
+
+          // Prefetch adjacent reels on every swipe
+          final urls = widget.videoPosts.map((p) => p.firstVideoUrl).toList();
+          ReelPrefetchManager.instance.prefetchAround(urls, i);
         },
         itemBuilder: (_, index) {
           final post = widget.videoPosts[index];
@@ -1945,22 +2123,24 @@ class _ReelItemState extends State<_ReelItem> {
       fit: StackFit.expand,
       children: [
         // Non-current reels show a cheap thumbnail; no video initialization.
-        if (!widget.isCurrent && post.thumbnailUrl.isNotEmpty)
+        // Always show thumbnail as base layer — prevents black flash while video loads
+        if (post.thumbnailUrl.isNotEmpty)
           CachedNetworkImage(
             imageUrl: post.thumbnailUrl,
             fit: BoxFit.cover,
-            memCacheWidth: 300,
-            memCacheHeight: 300,
+            memCacheWidth: 600,
+            memCacheHeight: 1000,
             placeholder: (_, __) => const ColoredBox(color: Colors.black),
             errorWidget: (_, __, ___) => const ColoredBox(color: Colors.black),
           ),
-        // [V4][V5] Full-screen video (only for current tile)
+// [V4][V5] Full-screen video (only for current tile)
         if (widget.isCurrent)
           GestureDetector(
             onDoubleTap: _onDoubleTap,
             child: _VideoCell(
               key: ValueKey('reel_${post.id}'),
               url: post.firstVideoUrl,
+              thumbnailUrl: post.thumbnailUrl,
               trimStartMs: firstVideo?.trimStartMs,
               trimEndMs: firstVideo?.trimEndMs,
               fit: BoxFit.cover,
@@ -2321,14 +2501,13 @@ class _ReelActionButton extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// [V2][V5][V7] VIDEO CELL — core video player widget
-// Fixed: autoPlay reacts to isCurrent changes via didUpdateWidget
-// Fixed: uses SizedBox.expand + FittedBox(cover) for true fullscreen fill
-// Fixed: mute syncs in didUpdateWidget without re-init
+// [V2][V5][V7][V11] VIDEO CELL — pool-first, warmUp preload without play,
+// visibility only pauses (never drops pooled ref), shared preload Future per URL.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _VideoCell extends StatefulWidget {
   final String url;
+  final String thumbnailUrl;
   final int? trimStartMs;
   final int? trimEndMs;
   final BoxFit fit;
@@ -2341,6 +2520,7 @@ class _VideoCell extends StatefulWidget {
   const _VideoCell({
     Key? key,
     required this.url,
+    this.thumbnailUrl = '',
     this.trimStartMs,
     this.trimEndMs,
     this.fit = BoxFit.cover,
@@ -2357,125 +2537,209 @@ class _VideoCell extends StatefulWidget {
 
 class _VideoCellState extends State<_VideoCell> {
   VideoPlayerController? _ctrl;
-  bool _ready = false;
+  String? _attachedUrl;
   bool _error = false;
-  bool _initialized = false;
+  bool _isVisible = false;
+  bool _listenerAttached = false;
   Duration _effectiveTrimStart = Duration.zero;
   Duration? _effectiveTrimEnd;
-  Timer? _initDebounce;
-  bool _isVisible = false;
+  Timer? _bindDebounce;
+  int _bindGeneration = 0;
+
+  bool get _videoReady =>
+      _ctrl != null && _ctrl!.value.isInitialized && !_error;
+
+  bool get _shouldBind =>
+      widget.url.isNotEmpty &&
+      (widget.autoPlay || widget.warmUp || _isVisible);
 
   @override
   void initState() {
     super.initState();
+    if (widget.url.isNotEmpty && (widget.autoPlay || widget.warmUp)) {
+      Future.microtask(_kickBind);
+    }
+  }
+
+  void _kickBind() {
+    if (!mounted) return;
+    if (widget.autoPlay) {
+      _bindDebounce?.cancel();
+      unawaited(_bindToPoolOrPreload());
+    } else {
+      _scheduleBind();
+    }
+  }
+
+  /// Short debounce (≤100ms) to coalesce rapid parent updates; autoplay binds immediately.
+  void _scheduleBind() {
+    if (!mounted || widget.url.isEmpty) return;
+    _bindDebounce?.cancel();
+    final ms = widget.autoPlay ? 0 : (widget.warmUp ? 50 : 80);
+    if (ms == 0) {
+      unawaited(_bindToPoolOrPreload());
+      return;
+    }
+    _bindDebounce = Timer(Duration(milliseconds: ms), () {
+      if (mounted) unawaited(_bindToPoolOrPreload());
+    });
   }
 
   @override
   void didUpdateWidget(_VideoCell old) {
     super.didUpdateWidget(old);
 
-    // URL changed — dispose and re-init
     if (old.url != widget.url) {
-      _initDebounce?.cancel();
-      _initDebounce = null;
-      _ctrl?.dispose();
+      if (old.url.isNotEmpty) {
+        VideoControllerPool.instance.release(old.url);
+      }
+      _bindGeneration++;
+      _bindDebounce?.cancel();
+      _detachListener();
       _ctrl = null;
-      _ready = false;
+      _attachedUrl = null;
       _error = false;
-      _initialized = false;
+      if (widget.url.isNotEmpty) {
+        Future.microtask(_kickBind);
+      } else {
+        setState(() {});
+      }
       return;
     }
 
-    // [V7] autoPlay changed — play or pause without reinit
-    if (_ready && old.autoPlay != widget.autoPlay) {
-      if (widget.autoPlay) {
-        final c = _ctrl;
-        if (c != null &&
-            c.value.isInitialized &&
-            c.value.position < _effectiveTrimStart) {
-          c.seekTo(_effectiveTrimStart);
-        }
-        _ctrl?.play();
-      } else {
-        _ctrl?.pause();
+    if (_videoReady) {
+      if (old.autoPlay != widget.autoPlay || old.muted != widget.muted) {
+        _applyMuteAndPlayback();
       }
     }
 
-    // Mute changed — update volume without reinit
-    if (old.muted != widget.muted && _ctrl != null) {
-      _ctrl!.setVolume(widget.muted ? 0 : 1);
+    if (!old.warmUp && widget.warmUp && widget.url.isNotEmpty) {
+      _scheduleBind();
     }
 
-    if (_ready &&
-        (old.trimStartMs != widget.trimStartMs ||
-            old.trimEndMs != widget.trimEndMs)) {
+    if (old.autoPlay != widget.autoPlay &&
+        widget.autoPlay &&
+        widget.url.isNotEmpty &&
+        !_videoReady) {
+      unawaited(_bindToPoolOrPreload());
+    }
+  }
+
+  /// Prefer pooled controller (already initialized). Otherwise [preload] and await
+  /// (deduped in [VideoControllerPool]).
+  Future<void> _bindToPoolOrPreload() async {
+    if (!mounted || widget.url.isEmpty) return;
+
+    final url = widget.url;
+    final gen = ++_bindGeneration;
+
+    if (_attachedUrl == url &&
+        _ctrl != null &&
+        _ctrl!.value.isInitialized) {
+      _applyMuteAndPlayback();
+      return;
+    }
+
+    if (!_shouldBind && !VideoControllerPool.instance.isReady(url)) {
+      return;
+    }
+
+    VideoPlayerController? pooled = VideoControllerPool.instance.get(url);
+    pooled ??= await VideoControllerPool.instance.preload(url);
+
+    if (!mounted || gen != _bindGeneration || widget.url != url) return;
+
+    if (pooled == null) {
+      setState(() => _error = true);
+      return;
+    }
+
+    _attachController(pooled, url);
+  }
+
+  void _attachController(VideoPlayerController ctrl, String url) {
+    if (!mounted || widget.url != url) return;
+
+    if (_ctrl != ctrl) {
+      _detachListener();
+      _ctrl = ctrl;
+      _attachedUrl = url;
+    }
+
+    if (!_listenerAttached) {
+      _ctrl!.addListener(_onControllerUpdate);
+      _listenerAttached = true;
+    }
+
+    if (_ctrl!.value.isInitialized) {
       _updateTrimBounds();
-      final c = _ctrl;
-      if (c != null &&
-          c.value.isInitialized &&
-          c.value.position < _effectiveTrimStart) {
-        c.seekTo(_effectiveTrimStart);
+    }
+    _applyMuteAndPlayback();
+    setState(() {});
+  }
+
+  void _detachListener() {
+    if (_listenerAttached && _ctrl != null) {
+      _ctrl!.removeListener(_onControllerUpdate);
+      _listenerAttached = false;
+    }
+  }
+
+  void _onControllerUpdate() {
+    if (!mounted) return;
+    final c = _ctrl;
+    if (c == null) return;
+
+    if (c.value.hasError) {
+      setState(() => _error = true);
+      return;
+    }
+
+    if (c.value.isInitialized) {
+      if (_effectiveTrimStart == Duration.zero &&
+          _effectiveTrimEnd == null &&
+          (widget.trimStartMs != null || widget.trimEndMs != null)) {
+        _updateTrimBounds();
       }
     }
 
-    // If this cell just became current while already visible, init now.
-    if (widget.autoPlay && _isVisible && !_initialized) {
-      _initDebounce?.cancel();
-      _initDebounce = Timer(const Duration(milliseconds: 220), () {
-        if (!mounted) return;
-        if (!_isVisible || !widget.autoPlay) return;
-        _initIfNeeded();
-        if (_ready) _ctrl?.play();
-      });
+    _enforceTrimWindow();
+  }
+
+  void _applyMuteAndPlayback() {
+    final c = _ctrl;
+    if (c == null || !c.value.isInitialized) return;
+
+    c.setVolume(widget.muted ? 0 : 1);
+    if (widget.autoPlay) {
+      _ensureAtTrimStart();
+      c.play();
+    } else {
+      c.pause();
     }
   }
 
-  void _initIfNeeded() {
-    if (_initialized || widget.url.isEmpty) return;
-    _initialized = true;
-
-    _ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url))
-      ..initialize().then((_) {
-        if (!mounted) return;
-        _updateTrimBounds();
-        _ctrl!
-          ..setVolume(widget.muted ? 0 : 1)
-          ..setLooping(false)
-          ..addListener(_enforceTrimWindow);
-        if (_effectiveTrimStart > Duration.zero) {
-          _ctrl!.seekTo(_effectiveTrimStart);
-        }
-        if (widget.autoPlay) _ctrl!.play();
-        setState(() => _ready = true);
-      }).catchError((_) {
-        if (!mounted) return;
-        setState(() => _error = true);
-      });
-  }
-
-  void _togglePlay() {
-    if (_ctrl == null || !_ready) return;
-    setState(() => _ctrl!.value.isPlaying ? _ctrl!.pause() : _ctrl!.play());
+  void _ensureAtTrimStart() {
+    final c = _ctrl;
+    if (c == null || !c.value.isInitialized) return;
+    if (c.value.position < _effectiveTrimStart) {
+      c.seekTo(_effectiveTrimStart);
+    }
   }
 
   void _updateTrimBounds() {
     final c = _ctrl;
     if (c == null || !c.value.isInitialized) return;
     final duration = c.value.duration;
-    final rawStart = widget.trimStartMs ?? 0;
-    final startMs = rawStart < 0 ? 0 : rawStart;
-    final rawEnd = widget.trimEndMs;
     final maxMs = duration.inMilliseconds;
-    final boundedStart = startMs > maxMs ? maxMs : startMs;
+    if (maxMs <= 0) return;
+    final startMs = (widget.trimStartMs ?? 0).clamp(0, maxMs);
+    final rawEnd = widget.trimEndMs;
     int? boundedEnd;
     if (rawEnd != null) {
-      if (rawEnd <= boundedStart) {
-        boundedEnd = maxMs;
-      } else {
-        boundedEnd = rawEnd > maxMs ? maxMs : rawEnd;
-      }
+      boundedEnd = rawEnd.clamp(startMs, maxMs);
     }
-    _effectiveTrimStart = Duration(milliseconds: boundedStart);
+    _effectiveTrimStart = Duration(milliseconds: startMs);
     _effectiveTrimEnd =
         boundedEnd != null ? Duration(milliseconds: boundedEnd) : null;
   }
@@ -2490,122 +2754,160 @@ class _VideoCellState extends State<_VideoCell> {
     }
   }
 
-  @override
-  void dispose() {
-    _initDebounce?.cancel();
-    _ctrl?.removeListener(_enforceTrimWindow);
-    _ctrl?.dispose();
-    super.dispose();
+  void _togglePlay() {
+    final c = _ctrl;
+    if (c == null || !_videoReady) return;
+    setState(() => c.value.isPlaying ? c.pause() : c.play());
   }
 
   @override
-  Widget build(BuildContext context) {
-    if (widget.url.isEmpty) {
-      return Container(color: Colors.black,
-          child: const Center(child: Icon(Icons.videocam_off, color: Colors.white54, size: 56)));
+  void dispose() {
+    _bindDebounce?.cancel();
+    _detachListener();
+    if (widget.url.isNotEmpty) {
+      VideoControllerPool.instance.release(widget.url);
+    }
+    _ctrl = null;
+    super.dispose();
+  }
+
+  Widget _thumbnailLayer(int decodeW, int decodeH) {
+    if (widget.thumbnailUrl.isEmpty) {
+      return const ColoredBox(color: Colors.black);
+    }
+    return CachedNetworkImage(
+      imageUrl: widget.thumbnailUrl,
+      cacheManager: AppCacheManager.media,
+      fit: BoxFit.cover,
+      memCacheWidth: decodeW,
+      memCacheHeight: decodeH,
+      placeholder: (_, __) => const ColoredBox(color: Colors.black),
+      errorWidget: (_, __, ___) => const ColoredBox(color: Colors.black),
+    );
+  }
+
+  Widget _buildCore(int decodeW, int decodeH) {
+    if (_error) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          _thumbnailLayer(decodeW, decodeH),
+          const ColoredBox(
+            color: Colors.black54,
+            child: Center(
+              child: Icon(Icons.videocam_off, color: Colors.white54, size: 56),
+            ),
+          ),
+        ],
+      );
     }
 
-    Widget content;
+    final showLoader = !_error &&
+        (_ctrl == null || !_ctrl!.value.isInitialized) &&
+        (widget.autoPlay || widget.warmUp);
 
-    if (_error) {
-      content = Container(color: Colors.black,
-          child: const Center(child: Icon(Icons.videocam_off, color: Colors.white54, size: 56)));
-    } else if (!_ready || _ctrl == null || !_ctrl!.value.isInitialized) {
-      // For non-current tiles keep it cheap (no spinner), to avoid jank.
-      content = Container(
-        color: Colors.black,
-        child: widget.autoPlay
-            ? const Center(
-                child: CircularProgressIndicator(
-                  color: Colors.white54,
-                  strokeWidth: 2,
-                ),
-              )
-            : null,
-      );
-    } else {
-      final c = _ctrl!;
-
-      // [V5] FIX: SizedBox.expand forces the player to fill the parent.
-      // FittedBox with BoxFit.cover crops to fill without letterboxing.
-      content = GestureDetector(
-        onTap: _togglePlay,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // This is the fix for aspect ratio — fills the screen like Instagram
+    return GestureDetector(
+      onTap: _videoReady ? _togglePlay : null,
+      behavior: HitTestBehavior.opaque,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _thumbnailLayer(decodeW, decodeH),
+          if (_videoReady) ...[
             SizedBox.expand(
               child: FittedBox(
                 fit: BoxFit.cover,
                 child: SizedBox(
-                  width:  c.value.size.width,
-                  height: c.value.size.height,
-                  child: VideoPlayer(c),
+                  width: _ctrl!.value.size.width,
+                  height: _ctrl!.value.size.height,
+                  child: VideoPlayer(_ctrl!),
                 ),
               ),
             ),
-
-            // Play icon overlay (fades when playing)
-            if (!c.value.isPlaying)
+            if (!_ctrl!.value.isPlaying)
               Container(
                 color: Colors.black26,
                 child: const Center(
-                    child: Icon(Icons.play_circle_fill_rounded, color: Colors.white70, size: 64)),
+                  child: Icon(
+                    Icons.play_circle_fill_rounded,
+                    color: Colors.white70,
+                    size: 64,
+                  ),
+                ),
               ),
-
-            // Progress bar
             if (widget.showProgressBar)
               Positioned(
-                bottom: 0, left: 0, right: 0,
+                bottom: 0,
+                left: 0,
+                right: 0,
                 child: VideoProgressIndicator(
-                  c,
+                  _ctrl!,
                   allowScrubbing: true,
                   colors: VideoProgressColors(
                     playedColor: Colors.white,
-                    bufferedColor: Colors.white.withOpacity(0.3),
-                    backgroundColor: Colors.white.withOpacity(0.1),
+                    bufferedColor: Colors.white.withValues(alpha: 0.3),
+                    backgroundColor: Colors.white.withValues(alpha: 0.1),
                   ),
                   padding: const EdgeInsets.symmetric(vertical: 3),
                 ),
               ),
           ],
+          if (showLoader)
+            const Center(
+              child: CircularProgressIndicator(
+                color: Colors.white70,
+                strokeWidth: 2,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.url.isEmpty) {
+      return const ColoredBox(
+        color: Colors.black,
+        child: Center(
+          child: Icon(Icons.videocam_off, color: Colors.white54, size: 56),
         ),
       );
     }
 
-    // Visibility detector for lazy init + auto-pause off-screen
+    final mq = MediaQuery.of(context);
+    final decodeW = (mq.size.width * mq.devicePixelRatio).round();
+    final decodeH = (mq.size.height * mq.devicePixelRatio).round();
+
+    final core = _buildCore(decodeW, decodeH);
+
     if (widget.visibilityKey != null) {
       return VisibilityDetector(
         key: Key(widget.visibilityKey!),
         onVisibilityChanged: (info) {
-          _isVisible = info.visibleFraction > 0.1;
-          if (_isVisible && widget.autoPlay) {
-            _initDebounce?.cancel();
-            _initDebounce = Timer(const Duration(milliseconds: 220), () {
-              if (!mounted) return;
-              // Initialize only if still current + visible after debounce.
-              if (!_isVisible || !widget.autoPlay) return;
-              _initIfNeeded();
-              if (_ready) _ctrl?.play();
-            });
-          } else {
-            _initDebounce?.cancel();
-            _initDebounce = null;
-            _ctrl?.pause();
-            // Dispose to keep active controllers minimal (max 2 across reels).
-            if (_initialized) {
-              _ctrl?.removeListener(_enforceTrimWindow);
-              _ctrl?.dispose();
-              _ctrl = null;
-              _ready = false;
-              _initialized = false;
-              _error = false;
+          final nowVisible = info.visibleFraction > 0.05;
+          _isVisible = nowVisible;
+
+          if (nowVisible) {
+            if (widget.autoPlay ||
+                widget.warmUp ||
+                VideoControllerPool.instance.isReady(widget.url)) {
+              _bindDebounce?.cancel();
+              if (widget.autoPlay) {
+                unawaited(_bindToPoolOrPreload());
+              } else {
+                _scheduleBind();
+              }
             }
+          } else {
+            _bindDebounce?.cancel();
+            _ctrl?.pause();
           }
         },
-        child: content,
+        child: core,
       );
     }
-    return content;
+
+    return core;
   }
 }
