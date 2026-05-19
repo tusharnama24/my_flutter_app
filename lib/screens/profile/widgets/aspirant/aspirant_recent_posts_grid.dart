@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:halo/screens/profile/core/profile_posts_queries.dart';
 import 'package:halo/screens/profile/widgets/common/profile_post_tile.dart';
 
 class AspirantRecentPostsGrid extends StatelessWidget {
@@ -67,16 +68,10 @@ class AspirantRecentPostsGrid extends StatelessWidget {
                 );
               }
               final allDocs = snap.data?.docs ?? [];
-              final sortedDocs = List.from(allDocs)..sort((a, b) {
-                final aData = a.data();
-                final bData = b.data();
-                final aTs = aData['timestamp'] ?? aData['createdAt'];
-                final bTs = bData['timestamp'] ?? bData['createdAt'];
-                if (aTs == null) return 1;
-                if (bTs == null) return -1;
-                if (aTs is Timestamp && bTs is Timestamp) return bTs.compareTo(aTs);
-                return 0;
-              });
+              final sortedDocs =
+                  List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
+                allDocs,
+              )..sort(ProfilePostsQueries.comparePostDocumentsByTimeDesc);
               final docs = sortedDocs.take(12).toList();
               if (docs.isEmpty) {
                 return Padding(

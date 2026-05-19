@@ -18,8 +18,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:visibility_detector/visibility_detector.dart';
-import 'package:halo/Profile%20Pages/wellness_profile_page.dart'
-as wellness_profile;
+import 'package:halo/screens/profile/profile_router_screen.dart';
 import 'package:halo/interest_selection_page.dart';
 import 'package:halo/services/story_service.dart';
 import 'package:halo/services/app_cache_manager.dart';
@@ -29,11 +28,6 @@ import 'package:halo/utils/story_ranking.dart';
 import 'package:halo/utils/story_utils.dart';
 import 'package:halo/story/story_viewer_page.dart';
 import 'package:halo/story/story_upload_sheet.dart';
-
-import 'package:halo/Profile%20Pages/aspirant_profile_page.dart'
-as aspirant_profile;
-import 'package:halo/Profile%20Pages/guru_profile_page.dart'
-as guru_profile;
 
 import 'package:halo/services/feed_service.dart';
 import 'package:halo/widgets/save_button.dart';
@@ -690,30 +684,12 @@ class _HomePageState extends State<HomePage> {
       // Use cached account type if profile fetch fails.
     }
 
-    if (effectiveType == 'wellness') {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) =>
-              wellness_profile.WellnessProfilePage(profileUserId: uid),
-        ),
-      );
-    } else if (effectiveType == 'guru') {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => guru_profile.GuruProfilePage(profileUserId: uid),
-        ),
-      );
-    } else {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) =>
-              aspirant_profile.ProfilePage(profileUserId: uid),
-        ),
-      );
-    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProfileRouterScreen(profileUserId: uid),
+      ),
+    );
   }
 
   @override
@@ -2024,31 +2000,13 @@ class _PostUserHeaderState extends State<_PostUserHeader> {
   void _openProfile() {
     final user = _user;
     if (user == null || widget.userId.isEmpty) return;
-    if (user.accountType == 'wellness') {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => wellness_profile.WellnessProfilePage(
-              profileUserId: widget.userId),
-        ),
-      );
-    } else if (user.accountType == 'guru') {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) =>
-              guru_profile.GuruProfilePage(profileUserId: widget.userId),
-        ),
-      );
-    } else {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) =>
-              aspirant_profile.ProfilePage(profileUserId: widget.userId),
-        ),
-      );
-    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            ProfileRouterScreen(profileUserId: widget.userId),
+      ),
+    );
   }
 
   @override

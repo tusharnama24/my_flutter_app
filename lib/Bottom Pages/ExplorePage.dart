@@ -23,9 +23,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
-import 'package:halo/Profile%20Pages/wellness_profile_page.dart' as wellness_profile;
-import 'package:halo/Profile%20Pages/aspirant_profile_page.dart' as aspirant_profile;
-import 'package:halo/Profile%20Pages/guru_profile_page.dart' as guru_profile;
+import 'package:halo/screens/profile/profile_router_screen.dart';
 import 'package:halo/widgets/save_button.dart';
 import 'package:halo/services/save_service.dart';
 import 'package:halo/models/media_model.dart';
@@ -2312,17 +2310,13 @@ class _ReelAuthorInfoState extends State<_ReelAuthorInfo> {
 
   void _openProfile() {
     if (widget.userId.isEmpty) return;
-    final accountType = (_userData?['accountType'] ?? 'aspirant').toString().toLowerCase();
-    if (accountType == 'wellness') {
-      Navigator.push(context, MaterialPageRoute(
-          builder: (_) => wellness_profile.WellnessProfilePage(profileUserId: widget.userId)));
-    } else if (accountType == 'guru') {
-      Navigator.push(context, MaterialPageRoute(
-          builder: (_) => guru_profile.GuruProfilePage(profileUserId: widget.userId)));
-    } else {
-      Navigator.push(context, MaterialPageRoute(
-          builder: (_) => aspirant_profile.ProfilePage(profileUserId: widget.userId)));
-    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            ProfileRouterScreen(profileUserId: widget.userId),
+      ),
+    );
   }
 
   @override

@@ -25,12 +25,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:halo/Profile%20Pages/aspirant_profile_page.dart'
-as aspirant_profile;
-import 'package:halo/Profile%20Pages/guru_profile_page.dart'
-as guru_profile;
-import 'package:halo/Profile%20Pages/wellness_profile_page.dart'
-as wellness_profile;
+import 'package:halo/screens/profile/profile_router_screen.dart';
+import 'package:halo/Profile Pages/aspirant_profile_page.dart' show PostDetailsPage;
 import 'package:halo/services/search_service.dart';
 import 'package:halo/utils/search_ranking.dart';
 
@@ -206,47 +202,17 @@ Route _buildPageRoute(Widget page) {
 // ------- OPEN USER PROFILE HELPER -------
 
 Future<void> openUserProfile(
-    BuildContext context,
-    String userId, {
-      String? knownAccountType,
-    }) async {
-  String accountType = (knownAccountType ?? '').trim().toLowerCase();
-  if (accountType.isEmpty) {
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
-          .get();
-      accountType =
-          _safeString(doc.data()?['accountType']).toLowerCase();
-      if (accountType.isEmpty) accountType = 'aspirant';
-    } catch (e) {
-      if (kDebugMode) debugPrint('openUserProfile: $e');
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content:
-            Text('Could not load profile. Opening default view.')));
-        Navigator.push(
-            context,
-            MaterialPageRoute(
-                builder: (_) => aspirant_profile.ProfilePage(
-                    profileUserId: userId)));
-      }
-      return;
-    }
-  }
-
+  BuildContext context,
+  String userId, {
+  String? knownAccountType,
+}) async {
   if (!context.mounted) return;
-  Widget page;
-  if (accountType == 'wellness') {
-    page = wellness_profile.WellnessProfilePage(profileUserId: userId);
-  } else if (accountType == 'guru') {
-    page = guru_profile.GuruProfilePage(profileUserId: userId);
-  } else {
-    page = aspirant_profile.ProfilePage(profileUserId: userId);
-  }
   Navigator.push(
-      context, MaterialPageRoute(builder: (_) => page));
+    context,
+    MaterialPageRoute(
+      builder: (_) => ProfileRouterScreen(profileUserId: userId),
+    ),
+  );
 }
 
 // ------- SAFE HELPERS -------
@@ -935,8 +901,7 @@ class _SearchPageState extends State<SearchPage>
                           context,
                           MaterialPageRoute(
                             builder: (_) =>
-                                aspirant_profile.PostDetailsPage(
-                                    postId: postId),
+                                PostDetailsPage(postId: postId),
                           ),
                         );
                       },

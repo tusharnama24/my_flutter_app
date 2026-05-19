@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:halo/screens/profile/widgets/common/profile_identity_layout.dart';
 
 class WellnessIdentityBlock extends StatelessWidget {
   final Widget avatar;
@@ -23,65 +24,53 @@ class WellnessIdentityBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Row(
+    return ProfileIdentityLayout(
+      avatar: avatar,
+      details: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Transform.translate(offset: const Offset(0, -40), child: avatar),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    businessName.isNotEmpty ? businessName : 'Business Name',
-                    style: GoogleFonts.poppins(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    username.isNotEmpty ? '@$username' : '',
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: const Color(0xFF8E8E8E),
-                      fontWeight: FontWeight.w400,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  _CategoryChip(
-                    category: category,
-                    isOwnProfile: isOwnProfile,
-                    onEditCategory: onEditCategory,
-                  ),
-                  const SizedBox(height: 6),
-                  if (location.isNotEmpty)
-                    Row(
-                      children: [
-                        const Icon(Icons.location_on_outlined, size: 14, color: Color(0xFF8E8E8E)),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
-                            location,
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: const Color(0xFF8E8E8E),
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
-              ),
+          Text(
+            businessName.isNotEmpty ? businessName : 'Business Name',
+            style: GoogleFonts.poppins(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
             ),
           ),
+          const SizedBox(height: 4),
+          Text(
+            username.isNotEmpty ? '@$username' : '',
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              color: const Color(0xFF8E8E8E),
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+          const SizedBox(height: 6),
+          _CategoryChip(
+            category: category,
+            isOwnProfile: isOwnProfile,
+            onEditCategory: onEditCategory,
+          ),
+          const SizedBox(height: 6),
+          if (location.isNotEmpty)
+            Row(
+              children: [
+                const Icon(Icons.location_on_outlined, size: 14, color: Color(0xFF8E8E8E)),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    location,
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: const Color(0xFF8E8E8E),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
         ],
       ),
     );

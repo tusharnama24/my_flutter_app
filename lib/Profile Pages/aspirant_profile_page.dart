@@ -12,8 +12,11 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:halo/Profile Pages/guru_profile_page.dart' as guru_profile;
-import 'package:halo/Profile Pages/wellness_profile_page.dart' as wellness_profile;
+import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
+import 'package:halo/screens/profile/core/profile_media_upload.dart';
+import 'package:halo/screens/profile/profile_router_screen.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
+import 'package:halo/screens/profile/widgets/common/profile_post_image_url.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
@@ -27,7 +30,6 @@ import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/Bottom Pages/saved_posts_page.dart';
 import 'package:halo/utils/search_utils.dart';
 import 'package:halo/services/follow_service.dart';
-import 'package:halo/widgets/stats_widget.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_identity_block.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_recent_posts_grid.dart';
@@ -38,6 +40,12 @@ import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state_rich.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
+import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
+import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
+import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
+import 'package:halo/screens/profile/widgets/common/profile_loading_gate.dart';
+import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
+import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
 import 'edit_profile_sections.dart'; // Edit pages for profile sections
 
 // ===================================================================
@@ -104,15 +112,6 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   List<Map<String, dynamic>> _personalRecords = [];     // Personal fitness records
   List<Map<String, dynamic>> _weeklyProgressData = [];  // Weekly progress data
 
-  // -------------------- UI CONSTANTS --------------------
-  static const double _coverHeight = 220.0;
-  static const double _avatarSize = 90.0;
-  static const double _avatarOverlap = 30.0;
-  static const Color _lavender = Color(0xFFA58CE3);
-  static const Color _deepLavender = Color(0xFF6D4DB3);
-  static const Color _bg = Color(0xFFF4F1FB);
-  static const Color _chipBg = Color(0xFFEDE7F6);
-
   // -------------------- INTERACTION STATE --------------------
   bool _isFollowing = false;
   bool _isPrivate = false;
@@ -163,40 +162,6 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       await _firestore.collection('users').doc(widget.profileUserId).get();
       if (doc.exists) {
         final data = doc.data()!;
-        final accountType = (data['accountType'] ?? 'aspirant').toString().toLowerCase();
-
-// agar guru found → guru page open
-        if (accountType == 'guru') {
-          if (!mounted) return;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => guru_profile.GuruProfilePage(
-                  profileUserId: widget.profileUserId,
-                ),
-              ),
-            );
-          });
-          return;
-        }
-
-// agar wellness found → wellness page open
-        if (accountType == 'wellness') {
-          if (!mounted) return;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => wellness_profile.WellnessProfilePage(
-                  profileUserId: widget.profileUserId,
-                ),
-              ),
-            );
-          });
-          return;
-        }
-
         _fullName = (data['full_name'] ?? '') as String;
         _username = (data['username'] ?? '') as String;
         _fitnessTag = (data['fitnessTag'] ?? 'Explorer on Halo') as String;
@@ -352,30 +317,19 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   void _previewCoverImage() {
-    if (_coverPhotoFile == null && (_coverPhotoUrl == null || _coverPhotoUrl!.isEmpty)) {
-      return;
-    }
-    final ImageProvider<Object> provider = _coverPhotoFile != null
-        ? FileImage(_coverPhotoFile!)
-        : NetworkImage(_coverPhotoUrl!);
-    openProfileMediaPreview(
-      context,
-      image: provider,
+    openProfileStoredImagePreview(
+      context: context,
+      localFile: _coverPhotoFile,
+      remoteUrl: _coverPhotoUrl,
       heroTag: 'aspirant-cover-${widget.profileUserId}',
     );
   }
 
   void _previewProfileImage() {
-    if (_profilePhotoFile == null &&
-        (_profilePhotoUrl == null || _profilePhotoUrl!.isEmpty)) {
-      return;
-    }
-    final ImageProvider<Object> provider = _profilePhotoFile != null
-        ? FileImage(_profilePhotoFile!)
-        : NetworkImage(_profilePhotoUrl!);
-    openProfileMediaPreview(
-      context,
-      image: provider,
+    openProfileStoredImagePreview(
+      context: context,
+      localFile: _profilePhotoFile,
+      remoteUrl: _profilePhotoUrl,
       heroTag: 'profile-avatar-${widget.profileUserId}',
     );
   }
@@ -384,22 +338,12 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       {required bool isCover}) async {
     if (_currentUser == null) return;
     try {
-      final fileName =
-          '${isCover ? 'cover' : 'profile'}_${_currentUser!.uid}_${DateTime.now().millisecondsSinceEpoch}';
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('users')
-          .child(_currentUser!.uid)
-          .child(fileName);
-      final task = ref.putFile(file);
-      final snap = await task;
-      final url = await snap.ref.getDownloadURL();
-      final key = isCover ? 'coverPhoto' : 'profilePhoto';
-
-      await _firestore
-          .collection('users')
-          .doc(_currentUser!.uid)
-          .update({key: url});
+      final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
+        firestore: _firestore,
+        userId: _currentUser!.uid,
+        file: file,
+        isCover: isCover,
+      );
 
       if (!mounted) return;
       setState(() {
@@ -424,37 +368,26 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
     final String currentUserId = _currentUser!.uid;
     final String profileUserId = widget.profileUserId;
-
     final bool wasFollowing = _isFollowing;
 
-    // Optimistic UI
-    setState(() {
-      _isFollowing = !wasFollowing;
-      _followersCount += wasFollowing ? -1 : 1;
-      if (_followersCount < 0) _followersCount = 0;
-    });
-    _followAnimController.forward(from: 0);
-
-    try {
-      await _followService.setFollowState(
-        currentUserId: currentUserId,
-        profileUserId: profileUserId,
-        shouldFollow: !wasFollowing,
-      );
-    } catch (e) {
-      debugPrint('follow toggle error: $e');
-
-      // Rollback UI
-      setState(() {
+    await ProfileFollowToggle.runOptimisticToggle(
+      followService: _followService,
+      currentUserId: currentUserId,
+      profileUserId: profileUserId,
+      wasFollowing: wasFollowing,
+      applyOptimisticUi: () => setState(() {
+        _isFollowing = !wasFollowing;
+        _followersCount += wasFollowing ? -1 : 1;
+        if (_followersCount < 0) _followersCount = 0;
+      }),
+      rollbackUi: () => setState(() {
         _isFollowing = wasFollowing;
         _followersCount += wasFollowing ? 1 : -1;
         if (_followersCount < 0) _followersCount = 0;
-      });
-
-      Fluttertoast.showToast(
-        msg: 'Something went wrong. Please try again.',
-      );
-    }
+      }),
+      afterOptimisticUi: () => _followAnimController.forward(from: 0),
+      errorToast: 'Something went wrong. Please try again.',
+    );
   }
 
   Future<void> _openMessage() async {
@@ -607,31 +540,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         ? NetworkImage(_coverPhotoUrl!)
         : const AssetImage('assets/images/bio.png')) as ImageProvider;
 
-    return GestureDetector(
+    return ProfileCoverHero(
+      cover: cover,
+      heroTag: 'aspirant-cover-${widget.profileUserId}',
       onTap: _isOwnProfile ? _pickCoverImage : _previewCoverImage,
       onLongPress: _previewCoverImage,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Hero(
-            tag: 'aspirant-cover-${widget.profileUserId}',
-            child: Container(
-              decoration: BoxDecoration(
-                image: DecorationImage(image: cover, fit: BoxFit.cover),
-              ),
-            ),
-          ),
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.black.withOpacity(0.25), Colors.transparent],
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -642,74 +555,19 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         ? NetworkImage(_profilePhotoUrl!)
         : const AssetImage('assets/images/Profile.png')) as ImageProvider;
 
-    return Hero(
-      tag: 'profile-avatar-${widget.profileUserId}',
-      child: GestureDetector(
-        onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
-        onLongPress: _previewProfileImage,
-        child: Container(
-          width: _avatarSize + 6,
-          height: _avatarSize + 6,
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.12),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              )
-            ],
-          ),
-          child: CircleAvatar(
-            radius: _avatarSize / 2,
-            backgroundImage: avatar,
-          ),
-        ),
-      ),
+    return ProfileAvatarHeroShell(
+      avatar: avatar,
+      heroTag: 'profile-avatar-${widget.profileUserId}',
+      onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
+      onLongPress: _previewProfileImage,
     );
   }
 
   Widget _buildStatsCard() {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          )
-        ],
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: StatsWidget(
-              value: _followersCount.toString(),
-              label: 'Followers',
-            ),
-          ),
-          Container(width: 1, height: 36, color: Colors.grey[200]),
-          Expanded(
-            child: StatsWidget(
-              value: _followingCount.toString(),
-              label: 'Following',
-            ),
-          ),
-          Container(width: 1, height: 36, color: Colors.grey[200]),
-          Expanded(
-            child: StatsWidget(
-              value: _postsCount.toString(),
-              label: 'Posts',
-            ),
-          ),
-        ],
-      ),
+    return ProfileThreeColumnStatsCard(
+      followers: _followersCount,
+      following: _followingCount,
+      posts: _postsCount,
     );
   }
 
@@ -720,7 +578,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       onToggleFollow: _toggleFollow,
       onMessage: _openMessage,
       onEditProfile: _handleEditProfile,
-      accentColor: _lavender,
+      accentColor: ProfileLayout.lavender,
     );
   }
 
@@ -835,34 +693,12 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     return fallback.isNotEmpty ? fallback : 'Suggested for you';
   }
 
-  void _openSuggestedUserProfile({
-    required String userId,
-    required String accountType,
-  }) {
+  void _openSuggestedUserProfile(String userId) {
     if (userId.isEmpty) return;
-    if (accountType == 'guru') {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => guru_profile.GuruProfilePage(profileUserId: userId),
-        ),
-      );
-      return;
-    }
-    if (accountType == 'wellness') {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) =>
-              wellness_profile.WellnessProfilePage(profileUserId: userId),
-        ),
-      );
-      return;
-    }
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ProfilePage(profileUserId: userId),
+        builder: (_) => ProfileRouterScreen(profileUserId: userId),
       ),
     );
   }
@@ -929,7 +765,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                           topLabel,
                           style: GoogleFonts.poppins(
                             fontSize: 8.5,
-                            color: _deepLavender,
+                            color: ProfileLayout.deepLavender,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -946,9 +782,9 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
                           side: BorderSide(
-                            color: isFollowing ? Colors.grey.shade400 : _deepLavender,
+                            color: isFollowing ? Colors.grey.shade400 : ProfileLayout.deepLavender,
                           ),
-                          backgroundColor: isFollowing ? Colors.white : _deepLavender,
+                          backgroundColor: isFollowing ? Colors.white : ProfileLayout.deepLavender,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),
                           ),
@@ -1072,10 +908,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     final matchText = _commonMatchText(data);
                     return InkWell(
                       borderRadius: BorderRadius.circular(12),
-                      onTap: () => _openSuggestedUserProfile(
-                        userId: d.id,
-                        accountType: 'guru',
-                      ),
+                      onTap: () => _openSuggestedUserProfile(d.id),
                       child: Container(
                         width: 110,
                         padding: const EdgeInsets.all(8),
@@ -1205,10 +1038,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     final matchText = _commonMatchText(data);
                     return InkWell(
                       borderRadius: BorderRadius.circular(12),
-                      onTap: () => _openSuggestedUserProfile(
-                        userId: d.id,
-                        accountType: 'wellness',
-                      ),
+                      onTap: () => _openSuggestedUserProfile(d.id),
                       child: Container(
                         width: 150,
                         padding: const EdgeInsets.all(8),
@@ -1349,11 +1179,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     final matchText = _commonMatchText(data);
                     return InkWell(
                       borderRadius: BorderRadius.circular(12),
-                      onTap: () => _openSuggestedUserProfile(
-                        userId: d.id,
-                        accountType:
-                            (data['accountType'] ?? 'aspirant').toString().toLowerCase(),
-                      ),
+                      onTap: () => _openSuggestedUserProfile(d.id),
                       child: Container(
                         width: 110,
                         padding: const EdgeInsets.all(8),
@@ -1479,7 +1305,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 padding: const EdgeInsets.symmetric(
                     horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: _chipBg,
+                  color: ProfileLayout.chipBg,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Row(
@@ -1971,10 +1797,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
+                          color: ProfileLayout.lavender.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.trending_up, color: _lavender, size: 24),
+                        child: Icon(Icons.trending_up, color: ProfileLayout.lavender, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Flexible(
@@ -1996,7 +1822,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     'View',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -2050,7 +1876,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Row(
                       children: [
-                        Icon(Icons.check_circle_outline, size: 18, color: _lavender),
+                        Icon(Icons.check_circle_outline, size: 18, color: ProfileLayout.lavender),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
@@ -2165,10 +1991,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
+                          color: ProfileLayout.lavender.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.calendar_today, color: _lavender, size: 24),
+                        child: Icon(Icons.calendar_today, color: ProfileLayout.lavender, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Flexible(
@@ -2226,13 +2052,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   height: 40,
                   decoration: BoxDecoration(
                     color: isToday 
-                        ? _lavender 
+                        ? ProfileLayout.lavender 
                         : isWorkoutDay 
-                            ? _lavender.withOpacity(0.2)
+                            ? ProfileLayout.lavender.withOpacity(0.2)
                             : Colors.grey[100],
                     borderRadius: BorderRadius.circular(8),
                     border: isToday 
-                        ? Border.all(color: _lavender, width: 2)
+                        ? Border.all(color: ProfileLayout.lavender, width: 2)
                         : null,
                   ),
                   child: Center(
@@ -2244,7 +2070,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                         color: isToday 
                             ? Colors.white 
                             : isWorkoutDay 
-                                ? _lavender 
+                                ? ProfileLayout.lavender 
                                 : Colors.grey[600],
                       ),
                     ),
@@ -2255,9 +2081,9 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             const SizedBox(height: 12),
             Row(
               children: [
-                _buildLegendItem(_lavender, 'Workout'),
+                _buildLegendItem(ProfileLayout.lavender, 'Workout'),
                 const SizedBox(width: 16),
-                _buildLegendItem(_lavender.withOpacity(0.3), 'Today'),
+                _buildLegendItem(ProfileLayout.lavender.withOpacity(0.3), 'Today'),
               ],
             ),
           ],
@@ -2298,8 +2124,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       onAddGoal: _addNewGoal,
       onEditGoal: _editGoal,
       onDeleteGoal: _deleteGoal,
-      accentColor: _lavender,
-      accentDarkColor: _deepLavender,
+      accentColor: ProfileLayout.lavender,
+      accentDarkColor: ProfileLayout.deepLavender,
     );
   }
 
@@ -2388,10 +2214,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: _lavender.withOpacity(0.15),
+                  color: ProfileLayout.lavender.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(Icons.emoji_events, color: _lavender, size: 24),
+                child: Icon(Icons.emoji_events, color: ProfileLayout.lavender, size: 24),
               ),
               const SizedBox(width: 12),
               Text(
@@ -2533,10 +2359,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
+                          color: ProfileLayout.lavender.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.bar_chart, color: _lavender, size: 24),
+                        child: Icon(Icons.bar_chart, color: ProfileLayout.lavender, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -2583,7 +2409,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                       height: height,
                       decoration: BoxDecoration(
                         color: calories > 0 
-                            ? _lavender 
+                            ? ProfileLayout.lavender 
                             : Colors.grey[300],
                         borderRadius: BorderRadius.circular(4),
                       ),
@@ -2631,7 +2457,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           style: GoogleFonts.poppins(
             fontSize: 20,
             fontWeight: FontWeight.bold,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         const SizedBox(height: 4),
@@ -2650,27 +2476,14 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   //  POSTS GRID
   // ===================================================================
   /// Resolves post image URL from AddPostPage format (images/media) or legacy (imageUrl).
-  static String? _getPostImageUrl(Map<String, dynamic> data) {
-    final imageUrl = data['imageUrl']?.toString();
-    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
-    final images = data['images'];
-    if (images is List && images.isNotEmpty) return images.first?.toString();
-    final media = data['media'];
-    if (media is List && media.isNotEmpty) {
-      final first = media.first;
-      if (first is Map && first['url'] != null) return first['url']?.toString();
-    }
-    return null;
-  }
-
   Widget _buildRecentPostsGrid() {
     return AspirantRecentPostsGrid(
       isPrivate: _isPrivate,
       isFollowing: _isFollowing,
       isOwnProfile: _isOwnProfile,
       profileUserId: widget.profileUserId,
-      accentColor: _lavender,
-      imageResolver: _getPostImageUrl,
+      accentColor: ProfileLayout.lavender,
+      imageResolver: profilePostImageUrlFromMap,
       onTapPost: (postId) {
         Navigator.push(
           context,
@@ -2699,7 +2512,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
     // 🔥 Detect background brightness
     final isDarkBg =
-        ThemeData.estimateBrightnessForColor(_bg) == Brightness.dark;
+        ThemeData.estimateBrightnessForColor(ProfileLayout.bg) == Brightness.dark;
 
     // 🔥 Dynamic text color
     final textColor = isDarkBg ? Colors.white : Colors.black87;
@@ -2712,15 +2525,15 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     return Theme(
       data: baseTheme.copyWith(textTheme: textTheme),
       child: Scaffold(
-        backgroundColor: _bg,
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : CustomScrollView(
+        backgroundColor: ProfileLayout.bg,
+        body: ProfileLoadingGate(
+          loading: _isLoading,
+          child: CustomScrollView(
           slivers: [
             SliverAppBar(
               pinned: true,
-              expandedHeight: _coverHeight,
-              backgroundColor: _lavender,
+              expandedHeight: ProfileLayout.coverHeight,
+              backgroundColor: ProfileLayout.lavender,
               elevation: 0,
               leading: IconButton(
                 icon: Icon(
@@ -2815,11 +2628,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 ],
               ],
               flexibleSpace: FlexibleSpaceBar(
-                background: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    _coverWidget(context),
-                  ],
+                background: ProfileFlexibleSpaceCoverStack(
+                  cover: _coverWidget(context),
                 ),
               ),
             ),
@@ -2828,7 +2638,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(height: _avatarOverlap + 18),
+                  SizedBox(height: ProfileLayout.identityColumnTopInset),
 
                   // Avatar + Name row (header)
                   AspirantIdentityBlock(
@@ -2872,6 +2682,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -2903,7 +2714,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Edit Progress',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -2918,10 +2729,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.monitor_weight, color: _lavender),
+                  prefixIcon: Icon(Icons.monitor_weight, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -2935,10 +2746,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.flag, color: _lavender),
+                  prefixIcon: Icon(Icons.flag, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -2952,10 +2763,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.analytics, color: _lavender),
+                  prefixIcon: Icon(Icons.analytics, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -2969,10 +2780,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.track_changes, color: _lavender),
+                  prefixIcon: Icon(Icons.track_changes, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -2990,7 +2801,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3040,7 +2851,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Add Fitness Goal',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: TextField(
@@ -3052,10 +2863,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
             ),
-            prefixIcon: Icon(Icons.flag, color: _lavender),
+            prefixIcon: Icon(Icons.flag, color: ProfileLayout.lavender),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: _lavender, width: 2),
+              borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
             ),
           ),
           maxLines: 2,
@@ -3070,7 +2881,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3115,7 +2926,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Edit Goal',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: TextField(
@@ -3126,10 +2937,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
             ),
-            prefixIcon: Icon(Icons.flag, color: _lavender),
+            prefixIcon: Icon(Icons.flag, color: ProfileLayout.lavender),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: _lavender, width: 2),
+              borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
             ),
           ),
           maxLines: 2,
@@ -3144,7 +2955,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3192,7 +3003,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Delete Goal',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -3340,7 +3151,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Edit Personal Record',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Column(
@@ -3357,7 +3168,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 prefixIcon: Icon(record['icon'] as IconData, color: record['color'] as Color),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: _lavender, width: 2),
+                  borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                 ),
               ),
             ),
@@ -3371,10 +3182,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                prefixIcon: Icon(Icons.edit, color: _lavender),
+                prefixIcon: Icon(Icons.edit, color: ProfileLayout.lavender),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: _lavender, width: 2),
+                  borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                 ),
               ),
             ),
@@ -3390,7 +3201,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),

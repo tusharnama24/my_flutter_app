@@ -24,7 +24,6 @@ import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
 import 'package:halo/services/follow_service.dart';
 import 'package:halo/widgets/follow_button.dart';
-import 'package:halo/widgets/stats_widget.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_identity_block.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_recent_posts_section.dart';
@@ -34,6 +33,18 @@ import 'package:halo/screens/profile/widgets/guru/guru_cta_row.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
+import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
+import 'package:halo/screens/profile/core/profile_posts_queries.dart';
+import 'package:halo/screens/profile/core/profile_reviews_queries.dart';
+import 'package:halo/screens/profile/core/profile_media_upload.dart';
+import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
+import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
+import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
+import 'package:halo/screens/profile/widgets/common/profile_loading_gate.dart';
+import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
+import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
+import 'package:halo/screens/profile/widgets/common/profile_post_image_url.dart';
 
 // GURU SECTIONS
 import '../Sections/Guru Section/guru_booking_section.dart';
@@ -41,35 +52,6 @@ import '../Sections/Guru Section/guru_classes_section.dart';
 import '../Sections/Guru Section/guru_earnings_section.dart';
 import '../Sections/Guru Section/guru_students_section.dart';
 import '../Sections/Guru Section/guru_analytics_section.dart';
-
-// ===================================================================
-//  SLIVER APP BAR DELEGATE (for TabBar)
-// ===================================================================
-class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
-  final TabBar tabBar;
-
-  _SliverAppBarDelegate(this.tabBar);
-
-  @override
-  double get minExtent => tabBar.preferredSize.height;
-
-  @override
-  double get maxExtent => tabBar.preferredSize.height;
-
-  @override
-  Widget build(
-      BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Container(
-      color: Colors.white,
-      child: tabBar,
-    );
-  }
-
-  @override
-  bool shouldRebuild(_SliverAppBarDelegate oldDelegate) {
-    return false;
-  }
-}
 
 // ===================================================================
 //  GURU PROFILE PAGE
@@ -121,7 +103,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   int _followingCount = 0;
   int _postsCount = 0;
 
-  double _rating = 4.8;
+  double _rating = 0.0;
   int _reviewCount = 0;
   bool _isPrivate = false;
 
@@ -161,14 +143,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   List<Map<String, dynamic>> _reviews = [];
   List<Map<String, dynamic>> _programs = [];
   List<Map<String, dynamic>> _lastWorkouts = [];
-
-  // -------------------- UI CONSTANTS --------------------
-  static const double _coverHeight = 220.0;
-  static const double _avatarSize = 90.0;
-  static const double _avatarOverlap = 30.0;
-  static const Color _lavender = Color(0xFFA58CE3);
-  static const Color _deepLavender = Color(0xFF6D4DB3);
-  static const Color _bg = Color(0xFFF4F1FB);
 
   // -------------------- STATE --------------------
   bool _isFollowing = false;
@@ -248,7 +222,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
         _rating = (data['rating'] is num)
             ? (data['rating'] as num).toDouble()
-            : 4.8;
+            : 0.0;
         _reviewCount = (data['reviewCount'] ?? 0) as int;
 
         _languages = List<String>.from(data['languages'] ?? []);
@@ -540,79 +514,16 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             : <String>[];
 
         // Load posts for first tab
-        try {
-          QuerySnapshot<Map<String, dynamic>> postsSnapshot;
-          try {
-            postsSnapshot = await _firestore
-                .collection('posts')
-                .where('userId', isEqualTo: widget.profileUserId)
-                .orderBy('timestamp', descending: true)
-                .limit(9)
-                .get();
-          } catch (_) {
-            // Try with createdAt if timestamp doesn't work
-            try {
-              postsSnapshot = await _firestore
-                  .collection('posts')
-                  .where('userId', isEqualTo: widget.profileUserId)
-                  .orderBy('createdAt', descending: true)
-                  .limit(9)
-                  .get();
-            } catch (_) {
-              // If both fail, get without orderBy
-              postsSnapshot = await _firestore
-                  .collection('posts')
-                  .where('userId', isEqualTo: widget.profileUserId)
-                  .limit(9)
-                  .get();
-            }
-          }
-
-          _recentPosts = postsSnapshot.docs.map((doc) {
-            final d = doc.data() as Map<String, dynamic>;
-            return <String, dynamic>{
-              'id': doc.id,
-              'imageUrl': d['imageUrl'] ?? '',
-              'caption': d['caption'] ?? '',
-              'timestamp': d['timestamp'] ?? d['createdAt'],
-            };
-          }).toList();
-        } catch (e) {
-          debugPrint('Error loading posts: $e');
-          _recentPosts = [];
-        }
+        _recentPosts = await ProfilePostsQueries.fetchGuruProfilePostsPreview(
+          firestore: _firestore,
+          profileUserId: widget.profileUserId,
+        );
 
         // Load reviews for first tab
-        try {
-          final QuerySnapshot<Map<String, dynamic>> reviewsSnapshot =
-          await _firestore
-              .collection('reviews')
-              .where('guruId', isEqualTo: widget.profileUserId)
-              .orderBy('createdAt', descending: true)
-              .orderBy(FieldPath.documentId, descending: true)
-              .limit(2)
-              .get();
-
-          if (reviewsSnapshot.docs.isNotEmpty) {
-            _reviews = reviewsSnapshot.docs.map((doc) {
-              final d = doc.data();
-              return <String, dynamic>{
-                'id': doc.id,
-                'name': d['userName'] ?? d['name'] ?? 'User',
-                'rating': d['rating'] ?? 5,
-                'text': d['text'] ?? '',
-                'createdAt': d['createdAt'],
-                'profilePhoto': d['profilePhoto'],
-              };
-            }).toList();
-          } else {
-            _reviews = [];
-          }
-        } catch (e) {
-          debugPrint('Error loading reviews: $e');
-          _reviews = [];
-        }
-
+        _reviews = await ProfileReviewsQueries.fetchGuruProfileReviewsPreview(
+          firestore: _firestore,
+          profileUserId: widget.profileUserId,
+        );
 
         // Load programs/services (from classes or popularProducts)
         try {
@@ -746,30 +657,19 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   void _previewCoverImage() {
-    if (_coverPhotoFile == null && (_coverPhotoUrl == null || _coverPhotoUrl!.isEmpty)) {
-      return;
-    }
-    final ImageProvider<Object> provider = _coverPhotoFile != null
-        ? FileImage(_coverPhotoFile!)
-        : NetworkImage(_coverPhotoUrl!);
-    openProfileMediaPreview(
-      context,
-      image: provider,
+    openProfileStoredImagePreview(
+      context: context,
+      localFile: _coverPhotoFile,
+      remoteUrl: _coverPhotoUrl,
       heroTag: 'guru-cover-${widget.profileUserId}',
     );
   }
 
   void _previewProfileImage() {
-    if (_profilePhotoFile == null &&
-        (_profilePhotoUrl == null || _profilePhotoUrl!.isEmpty)) {
-      return;
-    }
-    final ImageProvider<Object> provider = _profilePhotoFile != null
-        ? FileImage(_profilePhotoFile!)
-        : NetworkImage(_profilePhotoUrl!);
-    openProfileMediaPreview(
-      context,
-      image: provider,
+    openProfileStoredImagePreview(
+      context: context,
+      localFile: _profilePhotoFile,
+      remoteUrl: _profilePhotoUrl,
       heroTag: 'guru-avatar-${widget.profileUserId}',
     );
   }
@@ -777,21 +677,12 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   Future<void> _uploadAndSavePhoto(File file, {required bool isCover}) async {
     if (_currentUser == null) return;
     try {
-      final fileName =
-          '${isCover ? 'cover' : 'profile'}_${_currentUser!.uid}_${DateTime.now().millisecondsSinceEpoch}';
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('users')
-          .child(_currentUser!.uid)
-          .child(fileName);
-      final snap = await ref.putFile(file);
-      final url = await snap.ref.getDownloadURL();
-      final key = isCover ? 'coverPhoto' : 'profilePhoto';
-
-      await _firestore
-          .collection('users')
-          .doc(_currentUser!.uid)
-          .update({key: url});
+      final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
+        firestore: _firestore,
+        userId: _currentUser!.uid,
+        file: file,
+        isCover: isCover,
+      );
 
       if (!mounted) return;
       setState(() {
@@ -816,32 +707,26 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
     final String currentUserId = _currentUser!.uid;
     final String profileUserId = widget.profileUserId;
-
     final bool wasFollowing = _isFollowing;
 
-    setState(() {
-      _isFollowing = !wasFollowing;
-      _followersCount += wasFollowing ? -1 : 1;
-      if (_followersCount < 0) _followersCount = 0;
-    });
-    _followAnimController.forward(from: 0);
-
-    try {
-      await _followService.setFollowState(
-        currentUserId: currentUserId,
-        profileUserId: profileUserId,
-        shouldFollow: !wasFollowing,
-      );
-    } catch (e) {
-      debugPrint('follow toggle error: $e');
-      setState(() {
+    await ProfileFollowToggle.runOptimisticToggle(
+      followService: _followService,
+      currentUserId: currentUserId,
+      profileUserId: profileUserId,
+      wasFollowing: wasFollowing,
+      applyOptimisticUi: () => setState(() {
+        _isFollowing = !wasFollowing;
+        _followersCount += wasFollowing ? -1 : 1;
+        if (_followersCount < 0) _followersCount = 0;
+      }),
+      rollbackUi: () => setState(() {
         _isFollowing = wasFollowing;
         _followersCount += wasFollowing ? 1 : -1;
         if (_followersCount < 0) _followersCount = 0;
-      });
-      Fluttertoast.showToast(
-          msg: 'Something went wrong. Please try again later.');
-    }
+      }),
+      afterOptimisticUi: () => _followAnimController.forward(from: 0),
+      errorToast: 'Something went wrong. Please try again later.',
+    );
   }
 
   Future<void> _openMessage() async {
@@ -930,7 +815,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       context,
       MaterialPageRoute(
         builder: (ctx) => Scaffold(
-          backgroundColor: _bg,
+          backgroundColor: ProfileLayout.bg,
           appBar: AppBar(
             title: const Text('Booking Management'),
             backgroundColor: Colors.white,
@@ -963,7 +848,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       context,
       MaterialPageRoute(
         builder: (ctx) => Scaffold(
-          backgroundColor: _bg,
+          backgroundColor: ProfileLayout.bg,
           appBar: AppBar(
             title: Text('Book with $_fullName'),
             backgroundColor: Colors.white,
@@ -990,7 +875,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       context,
       MaterialPageRoute(
         builder: (ctx) => Scaffold(
-          backgroundColor: _bg,
+          backgroundColor: ProfileLayout.bg,
           appBar: AppBar(
             title: const Text('Classes & Batches'),
             backgroundColor: Colors.white,
@@ -1016,7 +901,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       context,
       MaterialPageRoute(
         builder: (ctx) => Scaffold(
-          backgroundColor: _bg,
+          backgroundColor: ProfileLayout.bg,
           appBar: AppBar(
             title: const Text('Earnings Overview'),
             backgroundColor: Colors.white,
@@ -1115,31 +1000,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         ? NetworkImage(_coverPhotoUrl!)
         : const AssetImage('assets/images/bio.png')) as ImageProvider;
 
-    return GestureDetector(
+    return ProfileCoverHero(
+      cover: cover,
+      heroTag: 'guru-cover-${widget.profileUserId}',
       onTap: _isOwnProfile ? _pickCoverImage : _previewCoverImage,
       onLongPress: _previewCoverImage,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Hero(
-            tag: 'guru-cover-${widget.profileUserId}',
-            child: Container(
-              decoration: BoxDecoration(
-                image: DecorationImage(image: cover, fit: BoxFit.cover),
-              ),
-            ),
-          ),
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.black.withOpacity(0.25), Colors.transparent],
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1150,74 +1015,19 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         ? NetworkImage(_profilePhotoUrl!)
         : const AssetImage('assets/images/Profile.png')) as ImageProvider;
 
-    return Hero(
-      tag: 'guru-avatar-${widget.profileUserId}',
-      child: GestureDetector(
-        onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
-        onLongPress: _previewProfileImage,
-        child: Container(
-          width: _avatarSize + 6,
-          height: _avatarSize + 6,
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.12),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              )
-            ],
-          ),
-          child: CircleAvatar(
-            radius: _avatarSize / 2,
-            backgroundImage: avatar,
-          ),
-        ),
-      ),
+    return ProfileAvatarHeroShell(
+      avatar: avatar,
+      heroTag: 'guru-avatar-${widget.profileUserId}',
+      onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
+      onLongPress: _previewProfileImage,
     );
   }
 
   Widget _buildStatsCard() {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          )
-        ],
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: StatsWidget(
-              value: _followersCount.toString(),
-              label: 'Followers',
-            ),
-          ),
-          Container(width: 1, height: 36, color: Colors.grey[200]),
-          Expanded(
-            child: StatsWidget(
-              value: _followingCount.toString(),
-              label: 'Following',
-            ),
-          ),
-          Container(width: 1, height: 36, color: Colors.grey[200]),
-          Expanded(
-            child: StatsWidget(
-              value: _postsCount.toString(),
-              label: 'Posts',
-            ),
-          ),
-        ],
-      ),
+    return ProfileThreeColumnStatsCard(
+      followers: _followersCount,
+      following: _followingCount,
+      posts: _postsCount,
     );
   }
 
@@ -1228,8 +1038,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       onToggleFollow: _toggleFollow,
       onMessage: _openMessage,
       onEditProfile: _handleEditProfile,
-      lavender: _lavender,
-      deepLavender: _deepLavender,
+      lavender: ProfileLayout.lavender,
+      deepLavender: ProfileLayout.deepLavender,
     );
   }
 
@@ -1265,7 +1075,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(height: _avatarOverlap + 18),
+        SizedBox(height: ProfileLayout.identityColumnTopInset),
         GuruIdentityBlock(
           avatar: _avatarWidget(),
           profileUserId: widget.profileUserId,
@@ -1335,10 +1145,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
         decoration: BoxDecoration(
-          color: selected ? _deepLavender : Colors.white,
+          color: selected ? ProfileLayout.deepLavender : Colors.white,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: selected ? _deepLavender : Colors.grey.shade300,
+            color: selected ? ProfileLayout.deepLavender : Colors.grey.shade300,
           ),
         ),
         child: Row(
@@ -1378,10 +1188,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     return Theme(
       data: baseTheme.copyWith(textTheme: textTheme),
       child: Scaffold(
-        backgroundColor: _bg,
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : GestureDetector(
+        backgroundColor: ProfileLayout.bg,
+        body: ProfileLoadingGate(
+          loading: _isLoading,
+          child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onHorizontalDragEnd: _isOwnProfile
               ? (details) {
@@ -1400,8 +1210,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             return [
               SliverAppBar(
                 pinned: true,
-                expandedHeight: _coverHeight,
-                backgroundColor: _lavender,
+                expandedHeight: ProfileLayout.coverHeight,
+                backgroundColor: ProfileLayout.lavender,
                 elevation: 0,
                 bottom: _isOwnProfile
                     ? PreferredSize(
@@ -1410,7 +1220,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                           color: Colors.white,
                           child: TabBar(
                             controller: _tabController,
-                            indicatorColor: _lavender,
+                            indicatorColor: ProfileLayout.lavender,
                             indicatorWeight: 3,
                             labelColor: Colors.black87,
                             unselectedLabelColor: Colors.black54,
@@ -1508,11 +1318,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   ],
                 ],
                 flexibleSpace: FlexibleSpaceBar(
-                  background: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _coverWidget(context),
-                    ],
+                  background: ProfileFlexibleSpaceCoverStack(
+                    cover: _coverWidget(context),
                   ),
                 ),
               ),
@@ -1541,6 +1348,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   ],
                 )
               : _buildFirstTab(),
+        ),
         ),
         ),
       ),
@@ -1609,8 +1417,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       onToggleFollow: _toggleFollow,
       onMessage: _openMessage,
       onBook: _handleBookNow,
-      lavender: _lavender,
-      deepLavender: _deepLavender,
+      lavender: ProfileLayout.lavender,
+      deepLavender: ProfileLayout.deepLavender,
     );
   }
 
@@ -1647,7 +1455,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 IconButton(
                   icon: const Icon(Icons.edit_outlined, size: 20),
                   onPressed: _editBio,
-                  color: _lavender,
+                  color: ProfileLayout.lavender,
                 ),
             ],
           ),
@@ -1666,7 +1474,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               onPressed: _editBio,
               icon: const Icon(Icons.add_circle_outline, size: 18),
               label: const Text('Add bio'),
-              style: TextButton.styleFrom(foregroundColor: _lavender),
+              style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
             )
           else
             Text(
@@ -1765,7 +1573,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Save'),
           ),
         ],
@@ -1809,7 +1617,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     onPressed: _editSpecializations,
                     icon: const Icon(Icons.add_circle_outline, size: 18),
                     label: const Text('Add specializations'),
-                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                    style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
                   )
                 : const ProfileEmptyState(text: 'No specializations yet'),
           )
@@ -1900,7 +1708,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Save'),
           ),
         ],
@@ -1947,7 +1755,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 IconButton(
                   icon: const Icon(Icons.add_photo_alternate_outlined, size: 20),
                   onPressed: _addGalleryImage,
-                  color: _lavender,
+                  color: ProfileLayout.lavender,
                 ),
             ],
           ),
@@ -1961,7 +1769,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     onPressed: _addGalleryImage,
                     icon: const Icon(Icons.add_circle_outline, size: 18),
                     label: const Text('Add gallery images'),
-                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                    style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
                   )
                 : Text(
                     'No gallery images',
@@ -2116,7 +1924,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     onPressed: _addProgram,
                     icon: const Icon(Icons.add_circle_outline, size: 18),
                     label: const Text('Add products'),
-                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                    style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
                   )
                 : Text(
                     'No products available',
@@ -2435,7 +2243,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 Navigator.pop(ctx, true);
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Add'),
           ),
         ],
@@ -2466,31 +2274,17 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     }
   }
 
-  /// Resolves post image URL from AddPostPage format (images/media) or legacy (imageUrl).
-  static String? _getPostImageUrl(Map<String, dynamic> data) {
-    final imageUrl = data['imageUrl']?.toString();
-    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
-    final images = data['images'];
-    if (images is List && images.isNotEmpty) return images.first?.toString();
-    final media = data['media'];
-    if (media is List && media.isNotEmpty) {
-      final first = media.first;
-      if (first is Map && first['url'] != null) return first['url']?.toString();
-    }
-    return null;
-  }
-
   Widget _buildRecentPostsSection() {
     return GuruRecentPostsSection(
       profileUserId: widget.profileUserId,
       isOwnProfile: _isOwnProfile,
-      accentColor: _lavender,
+      accentColor: ProfileLayout.lavender,
       onCreatePost: _openGalleryForPost,
       profilePhotoUrl: _profilePhotoUrl,
       username: _username,
       city: _city,
       formatPostTime: _formatPostTime,
-      imageResolver: _getPostImageUrl,
+      imageResolver: profilePostImageUrlFromMap,
     );
   }
 
@@ -2521,7 +2315,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     'Write a Review',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -2690,7 +2484,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 IconButton(
                   icon: const Icon(Icons.add_circle_outline, size: 20),
                   onPressed: _addAchievement,
-                  color: _lavender,
+                  color: ProfileLayout.lavender,
                 ),
             ],
           ),
@@ -2704,7 +2498,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     onPressed: _addAchievement,
                     icon: const Icon(Icons.add_circle_outline, size: 18),
                     label: const Text('Add achievements'),
-                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                    style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
                   )
                 : const ProfileEmptyState(text: 'No achievements yet'),
           )
@@ -2790,7 +2584,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 Navigator.pop(ctx, true);
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Add'),
           ),
         ],
@@ -2964,7 +2758,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(color: Colors.grey, width: 2),
-            color: selected ? _lavender : Colors.transparent,
+            color: selected ? ProfileLayout.lavender : Colors.transparent,
           ),
           child: selected
               ? const Icon(Icons.check, size: 14, color: Colors.white)
@@ -3051,8 +2845,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           end: Alignment.bottomCenter,
           colors: [
             Colors.white,
-            _bg,
-            _lavender.withOpacity(0.1),
+            ProfileLayout.bg,
+            ProfileLayout.lavender.withOpacity(0.1),
           ],
         ),
       ),
@@ -3077,10 +2871,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _lavender.withOpacity(0.15),
+                      color: ProfileLayout.lavender.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.format_quote, color: _lavender, size: 24),
+                    child: Icon(Icons.format_quote, color: ProfileLayout.lavender, size: 24),
                   ),
                   const SizedBox(width: 12),
                   Text(
@@ -3100,7 +2894,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     'View All',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -3147,11 +2941,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                         children: [
                           CircleAvatar(
                             radius: 20,
-                            backgroundColor: _lavender.withOpacity(0.2),
+                            backgroundColor: ProfileLayout.lavender.withOpacity(0.2),
                             child: Text(
                               name[0].toUpperCase(),
                               style: GoogleFonts.poppins(
-                                color: _lavender,
+                                color: ProfileLayout.lavender,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -3222,10 +3016,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _lavender.withOpacity(0.15),
+                      color: ProfileLayout.lavender.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.verified, color: _lavender, size: 24),
+                    child: Icon(Icons.verified, color: ProfileLayout.lavender, size: 24),
                   ),
                   const SizedBox(width: 12),
                   Text(
@@ -3240,7 +3034,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               ),
               if (_isOwnProfile)
                 IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
                   onPressed: _addCertification,
                 ),
             ],
@@ -3288,7 +3082,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _lavender.withOpacity(0.3)),
+                    border: Border.all(color: ProfileLayout.lavender.withOpacity(0.3)),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withOpacity(0.04),
@@ -3303,10 +3097,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
+                          color: ProfileLayout.lavender.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.verified_user, color: _lavender, size: 24),
+                        child: Icon(Icons.verified_user, color: ProfileLayout.lavender, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -3372,10 +3166,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _lavender.withOpacity(0.15),
+                      color: ProfileLayout.lavender.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.fitness_center, color: _lavender, size: 24),
+                    child: Icon(Icons.fitness_center, color: ProfileLayout.lavender, size: 24),
                   ),
                   const SizedBox(width: 12),
                   Text(
@@ -3395,7 +3189,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     'View All',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -3435,7 +3229,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                         icon: Icon(Icons.add, size: 18),
                         label: Text('Add Program'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: _lavender,
+                          backgroundColor: ProfileLayout.lavender,
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -3464,25 +3258,25 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [_lavender.withOpacity(0.1), _deepLavender.withOpacity(0.05)],
+                        colors: [ProfileLayout.lavender.withOpacity(0.1), ProfileLayout.deepLavender.withOpacity(0.05)],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: _lavender.withOpacity(0.3)),
+                      border: Border.all(color: ProfileLayout.lavender.withOpacity(0.3)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.play_circle_outline, color: _lavender, size: 24),
+                            Icon(Icons.play_circle_outline, color: ProfileLayout.lavender, size: 24),
                             const Spacer(),
                             if (program['price'] != null && (program['price'] as num) > 0)
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
-                                  color: _lavender,
+                                  color: ProfileLayout.lavender,
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
@@ -3536,7 +3330,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                           ElevatedButton(
                             onPressed: () => _showProgramDetails(program),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: _lavender,
+                              backgroundColor: ProfileLayout.lavender,
                               foregroundColor: Colors.white,
                             minimumSize: const Size(double.infinity, 36),
                             shape: RoundedRectangleBorder(
@@ -3610,7 +3404,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               ),
               if (_isOwnProfile)
                 IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
                   onPressed: _addSuccessStory,
                 ),
             ],
@@ -3774,7 +3568,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               ),
               if (_isOwnProfile)
                 IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
                   onPressed: _addVideoTutorial,
                 )
               else if (tutorials.isNotEmpty)
@@ -3784,7 +3578,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     'View All',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -3993,7 +3787,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Add Certification',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4008,10 +3802,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.verified_user, color: _lavender),
+                  prefixIcon: Icon(Icons.verified_user, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4024,10 +3818,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.business, color: _lavender),
+                  prefixIcon: Icon(Icons.business, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4040,10 +3834,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -4061,7 +3855,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4115,7 +3909,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Edit Certification',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4130,10 +3924,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.verified_user, color: _lavender),
+                  prefixIcon: Icon(Icons.verified_user, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4146,10 +3940,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.business, color: _lavender),
+                  prefixIcon: Icon(Icons.business, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4162,10 +3956,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -4183,7 +3977,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4234,7 +4028,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Delete Certification',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -4299,7 +4093,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Add Training Program',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4314,10 +4108,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.fitness_center, color: _lavender),
+                  prefixIcon: Icon(Icons.fitness_center, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4330,10 +4124,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4346,10 +4140,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.currency_rupee, color: _lavender),
+                  prefixIcon: Icon(Icons.currency_rupee, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -4363,10 +4157,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.description, color: _lavender),
+                  prefixIcon: Icon(Icons.description, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -4384,7 +4178,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4440,7 +4234,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Edit Training Program',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4455,10 +4249,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.fitness_center, color: _lavender),
+                  prefixIcon: Icon(Icons.fitness_center, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4471,10 +4265,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4487,10 +4281,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.currency_rupee, color: _lavender),
+                  prefixIcon: Icon(Icons.currency_rupee, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -4504,10 +4298,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.description, color: _lavender),
+                  prefixIcon: Icon(Icons.description, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -4525,7 +4319,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4577,7 +4371,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Delete Program',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -4641,7 +4435,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Add Success Story',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4656,10 +4450,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.person, color: _lavender),
+                  prefixIcon: Icon(Icons.person, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4672,10 +4466,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.emoji_events, color: _lavender),
+                  prefixIcon: Icon(Icons.emoji_events, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4688,10 +4482,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.format_quote, color: _lavender),
+                  prefixIcon: Icon(Icons.format_quote, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -4709,7 +4503,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4765,7 +4559,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Edit Success Story',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4780,10 +4574,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.person, color: _lavender),
+                  prefixIcon: Icon(Icons.person, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4796,10 +4590,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.emoji_events, color: _lavender),
+                  prefixIcon: Icon(Icons.emoji_events, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4812,10 +4606,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.format_quote, color: _lavender),
+                  prefixIcon: Icon(Icons.format_quote, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -4833,7 +4627,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4878,7 +4672,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Delete Success Story',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -4937,7 +4731,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Add Video Tutorial',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4952,10 +4746,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.play_circle_outline, color: _lavender),
+                  prefixIcon: Icon(Icons.play_circle_outline, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4968,10 +4762,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.access_time, color: _lavender),
+                  prefixIcon: Icon(Icons.access_time, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4984,10 +4778,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.link, color: _lavender),
+                  prefixIcon: Icon(Icons.link, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5004,7 +4798,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5059,7 +4853,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Edit Video Tutorial',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -5074,10 +4868,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.play_circle_outline, color: _lavender),
+                  prefixIcon: Icon(Icons.play_circle_outline, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5090,10 +4884,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.access_time, color: _lavender),
+                  prefixIcon: Icon(Icons.access_time, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5106,10 +4900,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.link, color: _lavender),
+                  prefixIcon: Icon(Icons.link, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5126,7 +4920,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5165,7 +4959,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Delete Video Tutorial',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -5279,7 +5073,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Write a Review',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -5298,7 +5092,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.star, color: _lavender),
+                  prefixIcon: Icon(Icons.star, color: ProfileLayout.lavender),
                 ),
                 keyboardType: TextInputType.number,
               ),
@@ -5310,7 +5104,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.rate_review, color: _lavender),
+                  prefixIcon: Icon(Icons.rate_review, color: ProfileLayout.lavender),
                 ),
                 maxLines: 4,
               ),
@@ -5327,7 +5121,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5498,13 +5292,13 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           width: double.infinity,
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: _lavender.withOpacity(0.12),
+            color: ProfileLayout.lavender.withOpacity(0.12),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: _lavender.withOpacity(0.25)),
+            border: Border.all(color: ProfileLayout.lavender.withOpacity(0.25)),
           ),
           child: Row(
             children: [
-              Icon(Icons.dashboard_customize_outlined, color: _deepLavender),
+              Icon(Icons.dashboard_customize_outlined, color: ProfileLayout.deepLavender),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -5512,11 +5306,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   style: GoogleFonts.poppins(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: _deepLavender,
+                    color: ProfileLayout.deepLavender,
                   ),
                 ),
               ),
-              Icon(Icons.arrow_forward_ios_rounded, size: 16, color: _deepLavender),
+              Icon(Icons.arrow_forward_ios_rounded, size: 16, color: ProfileLayout.deepLavender),
             ],
           ),
         ),
